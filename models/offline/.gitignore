@@ -1,0 +1,4 @@
+# Ignore model files but keep the directory structure and README.md
+/*
+!.gitignore
+!README.md
