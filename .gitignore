@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Dependencies
+.venv/
+venv/
+env/
+*.egg
+*.egg-info/
+build/
+dist/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Environment variables
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# Large files and directories
+models/
+vector_store/
+backup/
+data/
+static/
+templates/

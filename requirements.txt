@@ -1,0 +1,134 @@
+# ===============================================================
+# 个人智能问答机器人 - 依赖管理文件
+# 版本：v1.0.1
+# ===============================================================
+
+# ---------------------------
+# 核心依赖
+# ---------------------------
+# LangChain框架 - 提供RAG流程的核心功能
+langchain==0.1.16
+langchain-core==0.1.43
+langchain-community==0.0.32
+
+# Pydantic - 数据验证和设置管理
+pydantic==2.6.4
+
+# python-dotenv - 环境变量管理
+python-dotenv==1.0.1
+
+# ---------------------------
+# 向量数据库
+# ---------------------------
+# Chroma - 轻量级向量数据库，用于文档向量化存储和检索
+chromadb==0.4.24
+
+# ---------------------------
+# 自然语言处理
+# ---------------------------
+# Transformers - HuggingFace模型支持库
+transformers==4.38.2
+
+# SentenceTransformers - 句子嵌入模型
+sentence-transformers==2.5.1
+
+# ---------------------------
+# 大语言模型API客户端
+# ---------------------------
+# OpenAI - OpenAI API客户端
+openai==1.12.0
+
+# DashScope - 阿里云DashScope服务（支持通义千问等模型）
+dashscope==1.14.0
+
+# requests - HTTP请求库，用于API调用
+requests==2.31.0
+
+# ---------------------------
+# 文档处理
+# ---------------------------
+# python-docx - Word文档(.docx)处理
+docx==0.2.4
+python-docx==1.0.1
+
+# PyPDF2 - PDF文档处理
+PyPDF2==3.0.1
+
+# python-pptx - PowerPoint文档(.pptx)处理
+python-pptx==0.6.23
+
+# pandas - Excel文档处理和数据处理
+pandas==2.2.1
+openpyxl==3.1.2  # Excel文件支持
+
+# markdown - Markdown文档处理
+markdown==3.6
+
+# python-magic - 文件类型检测
+python-magic==0.4.27
+filetype==1.2.0
+
+# ---------------------------
+# 图像处理和OCR
+# ---------------------------
+# Pillow - 图像处理
+pillow==10.2.0
+
+# pytesseract - OCR文字识别
+pytesseract==0.3.10
+
+# ---------------------------
+# Web界面
+# ---------------------------
+# Flask - Web框架
+flask==3.0.3
+
+# Flask-CORS - 处理跨域请求
+flask-cors==4.0.1
+
+# ---------------------------
+# 工具库
+# ---------------------------
+# tqdm - 进度条显示
+tqdm==4.66.2
+
+# coloredlogs - 彩色日志输出
+coloredlogs==15.0.1
+
+# python-dotenv - 环境变量加载
+python-dotenv==1.0.1
+
+# ---------------------------
+# 可选依赖（离线模型支持）
+# ---------------------------
+# torch - PyTorch深度学习框架（用于运行本地模型）
+# torch==2.2.2
+
+# ---------------------------
+# 开发依赖（可选）
+# ---------------------------
+# pytest - 单元测试框架
+# pytest==8.0.2
+
+# black - 代码格式化工具
+# black==24.2.0
+
+# flake8 - 代码检查工具
+# flake8==7.0.0
+
+# ---------------------------
+# 安装说明
+# ---------------------------
+# 1. 基本安装:
+#   pip install -r requirements.txt
+# 
+# 2. 如需支持离线模型，请取消注释torch依赖并安装:
+#   pip install torch==2.2.2
+# 
+# 3. 开发环境安装:
+#   pip install -r requirements.txt pytest black flake8
+# 
+# 4. 注意事项:
+#   - 部分依赖可能需要特定版本的系统库支持
+#   - pytesseract需要安装Tesseract OCR引擎
+#   - 离线模型可能需要较大的磁盘空间和内存
