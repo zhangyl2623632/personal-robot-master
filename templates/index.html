@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人智能问答机器人</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/script.js"></script>
+
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>个人智能问答机器人</h1>
+            <p>基于本地文档的智能问答系统</p>
+        </header>
+
+        <main>
+            <!-- 功能切换选项卡 -->
+            <div class="tabs">
+                <button id="ask-tab" class="tab-button active" onclick="switchTab('ask')">单次提问</button>
+                <button id="chat-tab" class="tab-button" onclick="switchTab('chat')">对话模式</button>
+                <button id="upload-tab" class="tab-button" onclick="switchTab('upload')">文档上传</button>
+                <button id="status-tab" class="tab-button" onclick="switchTab('status')">系统状态</button>
+            </div>
+
+            <!-- 单次提问面板 -->
+            <div id="ask-panel" class="panel active">
+                <div class="panel-header">
+                    <h2>单次提问</h2>
+                    <p>不保留对话历史的单次问答</p>
+                </div>
+                <div class="chat-container">
+                    <div id="ask-messages" class="messages"></div>
+                    <div class="input-area">
+                        <textarea id="ask-input" placeholder="请输入您的问题..." rows="3"></textarea>
+                        <button id="ask-send" onclick="sendAskQuery()">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 对话模式面板 -->
+            <div id="chat-panel" class="panel">
+                <div class="panel-header">
+                    <h2>对话模式</h2>
+                    <p>保留对话历史的连续问答</p>
+                    <button id="clear-history" class="secondary-button" onclick="clearChatHistory()">清空历史</button>
+                </div>
+                <div class="chat-container">
+                    <div id="chat-messages" class="messages"></div>
+                    <div class="input-area">
+                        <textarea id="chat-input" placeholder="请输入您的问题..." rows="3"></textarea>
+                        <button id="chat-send" onclick="sendChatQuery()">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 文档上传面板 -->
+            <div id="upload-panel" class="panel">
+                <div class="panel-header">
+                    <h2>文档上传</h2>
+                    <p>上传新文档并添加到向量存储</p>
+                </div>
+                <div class="upload-container">
+                    <div class="upload-area">
+                        <div id="drop-area" class="drop-zone">
+                            <div class="drop-zone-content">
+                                <div class="drop-zone-icon">📁</div>
+                                <p>拖拽文件到此处或点击选择文件</p>
+                                <input type="file" id="file-input" class="file-input" multiple accept=".txt,.md,.pdf,.docx,.doc,.xlsx,.xls,.csv,.jpg,.jpeg,.png,.gif">
+                                <button id="select-file-btn" class="secondary-button" onclick="document.getElementById('file-input').click()">选择文件</button>
+                            </div>
+                        </div>
+                        
+                        <div id="file-list" class="file-list">
+                            <p>已选择的文件将显示在此处</p>
+                        </div>
+                        
+                        <div class="upload-actions">
+                            <button id="upload-btn" class="primary-button" onclick="uploadFiles()">开始上传</button>
+                            <button id="clear-files-btn" class="secondary-button" onclick="clearFileSelection()">清空选择</button>
+                        </div>
+                    </div>
+                    
+                    <div id="upload-status" class="upload-status">
+                        <h3>上传状态</h3>
+                        <div id="upload-log" class="upload-log"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 系统状态面板 -->
+            <div id="status-panel" class="panel">
+                <div class="panel-header">
+                    <h2>系统状态</h2>
+                    <button id="refresh-status" class="secondary-button" onclick="refreshStatus()">刷新</button>
+                </div>
+                <div class="status-container">
+                    <div class="status-item">
+                        <span class="status-label">API密钥状态:</span>
+                        <span id="api-key-status" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">向量存储中文档数量:</span>
+                        <span id="vector-count" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">文档目录:</span>
+                        <span id="documents-path" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">向量存储路径:</span>
+                        <span id="vector-store-path" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">使用的模型:</span>
+                        <span id="model-name" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">模型提供商:</span>
+                        <span id="model-provider" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item model-selection">
+                        <span class="status-label">切换模型:</span>
+                        <div class="model-selector">
+                            <select id="model-select">
+                                <option value="">请选择模型</option>
+                            </select>
+                            <button id="switch-model-btn" class="secondary-button" onclick="switchModel()">切换模型</button>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">系统版本:</span>
+                        <span id="system-version" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">元数据跟踪文档数:</span>
+                        <span id="vector-store-metadata-count" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">文档更新间隔:</span>
+                        <span id="document-update-interval" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">文档监控状态:</span>
+                        <span id="document-monitor-status" class="status-value">加载中...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">监控文件数量:</span>
+                        <span id="monitored-file-count" class="status-value">加载中...</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>个人智能问答机器人 - 基于DeepSeek API+LangChain+本地文档</p>
+        </footer>
+    </div>
+</body>
+</html>
