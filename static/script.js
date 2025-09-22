@@ -233,6 +233,40 @@ function refreshStatus() {
                     modelSelect.appendChild(option);
                 }
             }
+            
+            // 显示各模型API密钥状态
+            if (data.available_apis) {
+                let apiStatusHTML = '<div class="api-keys-status">';
+                
+                // 定义模型提供商的显示名称和颜色
+                const providerDisplayInfo = {
+                    'deepseek': { name: 'DeepSeek', color: '#667eea' },
+                    'qwen': { name: '通义千问', color: '#28a745' },
+                    'openai': { name: 'OpenAI', color: '#17a2b8' },
+                    'moonshot': { name: '月之暗面', color: '#6f42c1' }
+                };
+                
+                for (const [provider, isAvailable] of Object.entries(data.available_apis)) {
+                    const displayInfo = providerDisplayInfo[provider] || { name: provider, color: '#6c757d' };
+                    
+                    apiStatusHTML += `
+                        <div class="api-key-item">
+                            <span class="api-key-name" style="color: ${displayInfo.color};">${displayInfo.name}</span>
+                            <span class="api-key-status-badge api-key-status-${isAvailable ? 'configured' : 'not-configured'}">
+                                ${isAvailable ? '已配置' : '未配置'}
+                            </span>
+                        </div>
+                    `;
+                }
+                
+                apiStatusHTML += '</div>';
+                
+                // 更新API密钥状态显示
+                const apiKeyStatusElement = document.getElementById('api-key-status');
+                if (apiKeyStatusElement) {
+                    apiKeyStatusElement.innerHTML = apiStatusHTML;
+                }
+            }
         }
     })
     .catch(error => {
@@ -240,15 +274,39 @@ function refreshStatus() {
     });
 }
 
+// 显示模型切换状态信息
+function showModelSwitchStatus(message, isError = false) {
+    const statusElement = document.getElementById('model-switch-status');
+    statusElement.textContent = message;
+    statusElement.classList.remove('error', 'show');
+    if (isError) {
+        statusElement.classList.add('error');
+    }
+    statusElement.classList.add('show');
+    
+    // 3秒后自动隐藏
+    setTimeout(() => {
+        statusElement.classList.remove('show');
+    }, 3000);
+}
+
 // 切换模型
 function switchModel() {
     const modelSelect = document.getElementById('model-select');
+    const switchButton = document.getElementById('switch-model-btn');
     const selectedProvider = modelSelect.value;
     
     if (!selectedProvider) {
-        alert('请选择一个模型');
+        showModelSwitchStatus('请选择一个模型', true);
         return;
     }
+    
+    // 显示加载状态
+    switchButton.disabled = true;
+    switchButton.textContent = '切换中...';
+    modelSelect.disabled = true;
+    
+    console.log(`开始切换模型到: ${selectedProvider}`);
     
     // 发送请求到服务器切换模型
     fetch('/api/switch_model', {
@@ -258,18 +316,32 @@ function switchModel() {
         },
         body: JSON.stringify({ model_provider: selectedProvider })
     })
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP错误! 状态码: ${response.status}`);
+        }
+        return response.json();
+    })
     .then(data => {
         if (data.error) {
-            alert(`切换模型失败: ${data.error}`);
+            console.error('切换模型失败:', data.error);
+            showModelSwitchStatus(`切换失败: ${data.error}`, true);
         } else {
-            alert(data.message);
+            console.log('切换模型成功:', data);
+            showModelSwitchStatus(data.message);
             // 刷新系统状态，显示新的模型信息
             refreshStatus();
         }
     })
     .catch(error => {
-        alert(`请求失败: ${error.message}`);
+        console.error('模型切换请求失败:', error);
+        showModelSwitchStatus(`请求失败: ${error.message}`, true);
+    })
+    .finally(() => {
+        // 恢复按钮状态
+        switchButton.disabled = false;
+        switchButton.textContent = '切换模型';
+        modelSelect.disabled = false;
     });
 }
 

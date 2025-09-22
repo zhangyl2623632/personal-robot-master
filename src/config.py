@@ -8,18 +8,16 @@ class Config:
     # DeepSeek API 配置
     DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', '')
     # Qwen API 配置
-    # 注意：通义千问模型现在使用DASHSCOPE_API_KEY
     QWEN_API_KEY = os.environ.get('QWEN_API_KEY', '')
-    DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', '')
     # OpenAI API 配置
     OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
     # Moonshot API 配置
     MOONSHOT_API_KEY = os.environ.get('MOONSHOT_API_KEY', '')
     
     # 当前使用的模型配置
-    MODEL_PROVIDER = "qwen_dashscope"  # deepseek, openai, moonshot, qwen_dashscope
-    MODEL_NAME = "qwen-plus"
-    MODEL_URL = ""  # DashScope库封装了API URL
+    MODEL_PROVIDER = "deepseek"  # deepseek, openai, moonshot
+    MODEL_NAME = "deepseek-chat"
+    MODEL_URL = "https://api.deepseek.com/v1/chat/completions"
     TEMPERATURE = 0.1
     MAX_TOKENS = 2048
     TIMEOUT = 60
@@ -32,11 +30,11 @@ class Config:
             "url": "https://api.deepseek.com/v1/chat/completions",
             "api_key_name": "DEEPSEEK_API_KEY"
         },
-        "qwen_dashscope": {
-            "provider": "qwen_dashscope",
+        "qwen": {
+            "provider": "qwen",
             "name": "qwen-plus",
-            "url": "",  # DashScope库封装了API URL
-            "api_key_name": "DASHSCOPE_API_KEY"  # 通义千问模型现在使用DASHSCOPE_API_KEY
+            "url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "api_key_name": "QWEN_API_KEY"  # 使用QWEN_API_KEY环境变量
         },
         "openai": {
             "provider": "openai",

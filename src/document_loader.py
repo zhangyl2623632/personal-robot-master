@@ -43,6 +43,35 @@ class DocumentLoader:
         file_extension = os.path.splitext(file_path)[1].lower()
         
         try:
+            # 检查文件是否为空
+            if os.path.getsize(file_path) == 0:
+                logger.warning(f"空文件，跳过加载: {file_path}")
+                return []
+                
+            # 检查文件是否为有效的文本文件
+            if file_extension in ['.txt', '.md', '.csv']:
+                try:
+                    # 尝试以UTF-8编码打开文件，检查是否为有效文本
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        f.read(4096)  # 只读取一部分进行验证
+                except UnicodeDecodeError:
+                    logger.warning(f"文件编码错误，不是有效文本文件: {file_path}")
+                    return []
+                    
+            # 对于PDF文件，进行特殊处理以检测损坏的文件
+            elif file_extension == '.pdf':
+                try:
+                    # 简单验证PDF文件头
+                    with open(file_path, 'rb') as f:
+                        header = f.read(4)
+                        if header != b'%PDF':
+                            logger.warning(f"无效的PDF文件: {file_path}")
+                            return []
+                except Exception as e:
+                    logger.warning(f"PDF文件验证失败: {file_path}, 错误: {str(e)}")
+                    return []
+                    
+            # 加载文档的原有逻辑
             if file_extension == ".txt":
                 loader = TextLoader(file_path, encoding="utf-8")
             elif file_extension == ".md":

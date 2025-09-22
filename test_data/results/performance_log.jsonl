@@ -1,0 +1,11 @@
+{"query": "请概述本文档的主要内容", "response_time": 13.892859935760498, "success": true, "timestamp": "2025-09-19T14:30:41.670298", "cpu_percent": 8.6, "memory_percent": 81.8, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 13.762023687362671, "success": true, "timestamp": "2025-09-19T14:31:19.559338", "cpu_percent": 37.5, "memory_percent": 82.8, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 13.827259540557861, "success": true, "timestamp": "2025-09-19T14:31:19.566547", "cpu_percent": 40.2, "memory_percent": 82.8, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 13.771237134933472, "success": true, "timestamp": "2025-09-19T14:31:19.567872", "cpu_percent": 40.7, "memory_percent": 82.8, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 13.777481317520142, "success": true, "timestamp": "2025-09-19T14:31:19.568159", "cpu_percent": 38.1, "memory_percent": 82.8, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 15.978151082992554, "success": true, "timestamp": "2025-09-19T14:31:21.791540", "cpu_percent": 94.3, "memory_percent": 82.7, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 8.692836999893188, "success": true, "timestamp": "2025-09-19T14:31:28.378698", "cpu_percent": 34.5, "memory_percent": 82.1, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 8.750089168548584, "success": true, "timestamp": "2025-09-19T14:31:28.424318", "cpu_percent": 25.2, "memory_percent": 82.1, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 12.258263111114502, "success": true, "timestamp": "2025-09-19T14:31:31.931200", "cpu_percent": 28.0, "memory_percent": 81.7, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 12.668911695480347, "success": true, "timestamp": "2025-09-19T14:31:32.347680", "cpu_percent": 15.7, "memory_percent": 81.7, "vector_count": 2919}
+{"query": "请概述本文档的主要内容", "response_time": 10.772300481796265, "success": true, "timestamp": "2025-09-19T14:31:32.671411", "cpu_percent": 20.3, "memory_percent": 81.7, "vector_count": 2919}
