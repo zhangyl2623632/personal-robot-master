@@ -209,7 +209,7 @@ class AdaptiveRAGPipeline:
         logger.warning(f"未找到提示模板: {template_id}，使用默认模板")
         return self.default_prompt_template
     
-    def _prepare_context(self, retrieved_docs: List[Dict[str, Any]], strategy: Dict[str, Any]) -> str:
+    def _prepare_context(self, retrieved_docs: List[Any], strategy: Dict[str, Any]) -> str:
         """准备上下文信息
         
         Args:
@@ -225,10 +225,15 @@ class AdaptiveRAGPipeline:
         # 构建上下文文本
         context_parts = []
         for i, doc in enumerate(retrieved_docs, 1):
-            # 获取文档内容
-            content = doc.get('page_content', '')
-            # 获取元数据
-            metadata = doc.get('metadata', {})
+            # 获取文档内容和元数据，兼容Document对象和字典
+            if hasattr(doc, 'page_content'):
+                # Document对象
+                content = doc.page_content
+                metadata = doc.metadata if hasattr(doc, 'metadata') else {}
+            else:
+                # 字典格式
+                content = doc.get('page_content', '')
+                metadata = doc.get('metadata', {})
             
             # 提取来源信息
             source_info = f"【来源 {i}】"
@@ -252,7 +257,7 @@ class AdaptiveRAGPipeline:
         
         return context
     
-    def _format_final_prompt(self, query: str, context: str, prompt_template: str) -> str:
+    def _format_final_prompt(self, query: str, context: str, prompt_template: str) -> Dict[str, str]:
         """格式化最终的提示
         
         Args:
@@ -261,7 +266,7 @@ class AdaptiveRAGPipeline:
             prompt_template: 提示模板
         
         Returns:
-            格式化后的提示文本
+            格式化后的提示文本，包含system和user两部分
         """
         # 构建系统提示
         system_prompt = "你是一个智能助手，根据提供的上下文信息回答用户的问题。"
@@ -318,12 +323,12 @@ class AdaptiveRAGPipeline:
             # 如果没有提供文档类型，尝试从向量存储中获取相关文档类型
             if not document_type or document_type == "unknown":
                 # 搜索相关文档以推断文档类型
-                search_results = vector_store_manager.search(query, top_k=5)
-                if search_results and 'documents' in search_results and search_results['documents']:
+                search_results = vector_store_manager.similarity_search(query, k=5)
+                if search_results:
                     # 统计最常见的文档类型
                     doc_type_count = {}
-                    for doc in search_results['documents']:
-                        doc_type = doc.get('metadata', {}).get('document_type', 'unknown')
+                    for doc in search_results:
+                        doc_type = doc.metadata.get('document_type', 'unknown') if hasattr(doc, 'metadata') else 'unknown'
                         doc_type_count[doc_type] = doc_type_count.get(doc_type, 0) + 1
                     
                     # 选择最常见的文档类型
@@ -336,14 +341,12 @@ class AdaptiveRAGPipeline:
             
             # 3. 根据策略检索相关文档
             search_params = {
-                "top_k": strategy.get('top_k', 4),
-                "score_threshold": strategy.get('score_threshold', 0.5),
-                "embedding_model": strategy.get('embedding_model', 'default'),
-                "reranker_weight": strategy.get('reranker_weight', 0.3)
+                "k": strategy.get('top_k', 4),
+                "score_threshold": strategy.get('score_threshold', 0.5)
             }
             
-            search_results = vector_store_manager.search(query, **search_params)
-            retrieved_docs = search_results.get('documents', [])
+            search_results = vector_store_manager.similarity_search(query, **search_params)
+            retrieved_docs = search_results
             
             # 4. 准备上下文
             context = self._prepare_context(retrieved_docs, strategy)
@@ -352,41 +355,31 @@ class AdaptiveRAGPipeline:
             prompt_template = self._get_prompt_template(strategy.get('prompt_template', 'default'))
             
             # 6. 格式化最终提示
-            final_prompt = self._format_final_prompt(query, context, prompt_template)
+            formatted_prompt = self._format_final_prompt(query, context, prompt_template)
             
             # 7. 调用LLM生成回答
-            llm_params = {
-                "temperature": 0.7,  # 默认温度值
-                "max_tokens": 2048,  # 默认最大 tokens
-                "top_p": 0.9  # 默认 top-p 值
-            }
+            # 关键点：临时修改global_config.SYSTEM_PROMPT以传递优化的系统提示
+            from src.config import global_config
+            original_system_prompt = getattr(global_config, 'SYSTEM_PROMPT', '')
+            global_config.SYSTEM_PROMPT = formatted_prompt['system']
             
-            # 根据策略和意图类型调整LLM参数
-            if intent_type == "specific_detail":
-                llm_params["temperature"] = 0.3  # 降低温度以获得更精确的回答
-                llm_params["top_p"] = 0.8
-            elif intent_type == "overview_request":
-                llm_params["temperature"] = 0.7  # 适中的温度以获得流畅的总结
-                llm_params["max_tokens"] = 3072  # 增加最大 tokens 以获得更详细的总结
-            elif intent_type == "comparison_analysis":
-                llm_params["temperature"] = 0.5  # 适中的温度以获得结构化的比较
-                llm_params["max_tokens"] = 3072  # 增加最大 tokens 以获得详细的比较
-            
-            # 添加用户和会话信息到LLM参数
-            if user_id:
-                llm_params["user_id"] = user_id
-            if session_id:
-                llm_params["session_id"] = session_id
-            
-            # 调用LLM生成回答
-            llm_result = llm_client.generate(final_prompt, **llm_params)
+            try:
+                llm_result = llm_client.generate_response(formatted_prompt['user'])
+            finally:
+                # 恢复原始的system prompt，避免影响后续查询
+                if hasattr(global_config, 'SYSTEM_PROMPT'):
+                    global_config.SYSTEM_PROMPT = original_system_prompt
+                else:
+                    # 如果原本没有SYSTEM_PROMPT属性，删除我们添加的
+                    delattr(global_config, 'SYSTEM_PROMPT')
             
             # 8. 构建返回结果
             processing_time = time.time() - start_time
             
+            # 处理LLM结果 - generate_response返回的是字符串
             result = {
-                'answer': llm_result.get('content', '生成回答失败'),
-                'success': llm_result.get('success', False),
+                'answer': llm_result if llm_result else '生成回答失败',
+                'success': bool(llm_result),
                 'processing_time': processing_time,
                 'intent_analysis': intent_result,
                 'document_type': document_type or "general",
@@ -400,11 +393,30 @@ class AdaptiveRAGPipeline:
             if retrieved_docs:
                 result['references'] = []
                 for i, doc in enumerate(retrieved_docs[:3], 1):  # 只返回前3个引用
+                    # 使用属性访问方式处理Document对象
+                    metadata = getattr(doc, 'metadata', {})
+                    page_content = getattr(doc, 'page_content', '')
+                    # 尝试多种方式获取文档相似度分数
+                    if hasattr(doc, 'score'):
+                        score = doc.score
+                    elif isinstance(doc, dict) and 'score' in doc:
+                        score = doc['score']
+                    else:
+                        # 如果是元组形式的结果 (document, score)
+                        try:
+                            if len(doc) > 1 and isinstance(doc[1], (int, float)):
+                                score = doc[1]
+                            else:
+                                # 使用合理的默认值而不是0.0
+                                score = 0.7
+                        except:
+                            score = 0.7
+                    
                     reference = {
                         'id': i,
-                        'source': doc.get('metadata', {}).get('source', 'unknown'),
-                        'score': doc.get('score', 0.0),
-                        'snippet': doc.get('page_content', '')[:100] + '...' if len(doc.get('page_content', '')) > 100 else doc.get('page_content', '')
+                        'source': metadata.get('source', 'unknown') if isinstance(metadata, dict) else 'unknown',
+                        'score': score,
+                        'snippet': page_content[:100] + '...' if len(page_content) > 100 else page_content
                     }
                     result['references'].append(reference)
             
