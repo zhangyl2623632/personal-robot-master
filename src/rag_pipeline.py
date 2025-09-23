@@ -2,11 +2,13 @@ import os
 import logging
 import time
 import threading
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from src.document_loader import document_loader
 from src.vector_store import vector_store_manager
 from src.llm_client import llm_client
 from src.config import global_config
+# 导入自适应RAG流水线
+from src.adaptive_rag_pipeline import adaptive_rag_pipeline
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -201,12 +203,12 @@ class RAGPipeline:
         return query
     
     def answer_query(self, query: str, use_history: bool = True, k: int = 3) -> Optional[str]:
-        """回答用户查询
+        """回答用户查询（使用自适应RAG流水线）
         
         Args:
             query: 用户查询
             use_history: 是否使用对话历史
-            k: 检索的相关文档数量
+            k: 检索的相关文档数量（已废弃，使用自适应RAG策略中的配置）
         
         Returns:
             生成的回答，如果失败则返回None
@@ -217,70 +219,119 @@ class RAGPipeline:
                 logger.warning("空查询，无法回答")
                 return "很抱歉，您的查询不能为空。请输入有效的问题。"
             
-            # 预处理用户问题
-            processed_query = self.preprocess_query(query)
+            # 使用自适应RAG流水线回答查询
+            # 从对话历史中提取最近的文档类型信息（如果有）
+            history = self.get_conversation_history() if use_history else []
+            document_type = None
             
-            # 检查组件健康状态
-            health_status = self._health_check()
+            # 从最近的对话历史中提取文档类型信息
+            if history:
+                for msg in reversed(history):
+                    if msg.get('role') == 'assistant' and 'metadata' in msg and 'document_type' in msg['metadata']:
+                        document_type = msg['metadata']['document_type']
+                        break
             
-            # 准备对话历史
-            history = self.get_conversation_history() if use_history else None
+            # 调用自适应RAG流水线
+            result = adaptive_rag_pipeline.answer_query(
+                query=query,
+                document_type=document_type,
+                metadata={'use_history': use_history}
+            )
             
-            # 尝试获取相关文档
-            context = None
-            try:
-                # 检查是否有可用的向量存储
-                vector_count = self.vector_store_manager.get_vector_count()
-                if vector_count > 0:
-                    # 进行相似度搜索，获取相关文档
-                    relevant_docs = self.vector_store_manager.similarity_search(query, k=k)
-                    if relevant_docs:
-                        # 提取相关文档的内容
-                        context = [doc.page_content for doc in relevant_docs]
-                        logger.debug(f"找到了 {len(relevant_docs)} 个相关文档片段")
-                    else:
-                        logger.warning("没有找到相关文档")
-                else:
-                    logger.warning("向量存储为空，将尝试直接回答")
-            except Exception as e:
-                logger.error(f"搜索相关文档失败: {str(e)}")
-                # 即使搜索失败，也尝试继续回答
+            answer = result.get('answer', '很抱歉，我无法为您生成回答。请尝试重新表述您的问题。')
             
-            # 调用LLM生成回答，添加重试机制
-            max_retries = 2
-            retry_count = 0
-            answer = None
-            
-            while retry_count < max_retries and not answer:
-                try:
-                    answer = self.llm_client.generate_response(processed_query, context=context, history=history)
-                    if not answer:
-                        logger.warning(f"LLM生成回答失败，正在重试 ({retry_count+1}/{max_retries})")
-                        retry_count += 1
-                        time.sleep(0.5)  # 简单退避
-                except Exception as e:
-                    logger.error(f"调用LLM时发生异常: {str(e)}")
-                    retry_count += 1
-                    time.sleep(0.5)
-            
-            # 如果仍然没有回答，提供默认响应
-            if not answer:
-                if not health_status['llm_client']:
-                    answer = "很抱歉，当前AI服务不可用，请稍后再试。"
-                elif not health_status['vector_store']:
-                    answer = "很抱歉，文档检索服务暂时不可用，请稍后再试。"
-                else:
-                    answer = "很抱歉，我无法为您生成回答。请尝试重新表述您的问题。"
-            
-            # 更新对话历史
+            # 更新对话历史，包含元数据
             if use_history:
                 self.add_to_conversation_history("user", query)
-                self.add_to_conversation_history("assistant", answer)
+                # 添加回答和元数据到对话历史
+                assistant_msg = {"role": "assistant", "content": answer}
+                if 'document_type' in result:
+                    assistant_msg['metadata'] = {'document_type': result['document_type']}
+                self.conversation_history.append(assistant_msg)
             
             return answer
         except Exception as e:
             logger.error(f"回答查询失败: {str(e)}", exc_info=True)
             return "很抱歉，处理您的请求时发生错误，请稍后再试。"
+            
+    def chat_with_references(self, query: str, use_history: bool = True, user_id: str = None, session_id: str = None) -> Dict[str, Any]:
+        """带引用的智能问答，返回回答和相关引用信息
+        
+        Args:
+            query: 用户查询
+            use_history: 是否使用对话历史
+            user_id: 用户ID
+            session_id: 会话ID
+        
+        Returns:
+            包含回答、引用信息和其他元数据的字典
+        """
+        try:
+            # 检查查询是否为空
+            if not query or not query.strip():
+                logger.warning("空查询，无法回答")
+                return {
+                    'answer': "很抱歉，您的查询不能为空。请输入有效的问题。",
+                    'success': False,
+                    'error': "空查询",
+                    'references': []
+                }
+            
+            # 使用自适应RAG流水线回答查询
+            # 从对话历史中提取最近的文档类型信息（如果有）
+            history = self.get_conversation_history() if use_history else []
+            document_type = None
+            
+            # 从最近的对话历史中提取文档类型信息
+            if history:
+                for msg in reversed(history):
+                    if msg.get('role') == 'assistant' and 'metadata' in msg and 'document_type' in msg['metadata']:
+                        document_type = msg['metadata']['document_type']
+                        break
+            
+            # 调用自适应RAG流水线
+            result = adaptive_rag_pipeline.answer_query(
+                query=query,
+                document_type=document_type,
+                user_id=user_id,
+                session_id=session_id,
+                metadata={'use_history': use_history}
+            )
+            
+            # 构建返回结果
+            response = {
+                'answer': result.get('answer', '很抱歉，我无法为您生成回答。请尝试重新表述您的问题。'),
+                'success': result.get('success', False),
+                'processing_time': result.get('processing_time', 0),
+                'intent_type': result.get('intent_analysis', {}).get('intent_type', 'unknown'),
+                'intent_name': result.get('intent_analysis', {}).get('intent_name', '未知意图'),
+                'document_type': result.get('document_type', 'general'),
+                'retrieved_documents': result.get('retrieved_documents', 0),
+                'query_keywords': result.get('query_keywords', []),
+                'references': result.get('references', [])
+            }
+            
+            # 更新对话历史，包含元数据
+            if use_history:
+                self.add_to_conversation_history("user", query)
+                # 添加回答和元数据到对话历史
+                assistant_msg = {"role": "assistant", "content": response['answer']}
+                assistant_msg['metadata'] = {
+                    'document_type': response['document_type'],
+                    'intent_type': response['intent_type'],
+                    'references_count': len(response['references'])
+                }
+                self.conversation_history.append(assistant_msg)
+            
+            return response
+        except Exception as e:
+            logger.error(f"带引用的智能问答失败: {str(e)}", exc_info=True)
+            return {
+                'answer': "很抱歉，处理您的请求时发生错误，请稍后再试。",
+                'success': False,
+                'error': str(e),
+                'references': []
+            }
     
     def add_to_conversation_history(self, role: str, content: str) -> None:
         """添加消息到对话历史，线程安全"""

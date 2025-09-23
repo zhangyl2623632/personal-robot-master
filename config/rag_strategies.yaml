@@ -1,0 +1,112 @@
+# RAG策略配置文件
+strategies:
+  # 学术论文 - 具体细节查询策略
+  "学术论文_具体细节查询":
+    top_k: 5
+    score_threshold: 0.6
+    embedding_model: "bge-tech"
+    reranker_weight: 0.4
+    prompt_template: "citation"
+  
+  # 学术论文 - 概述请求策略
+  "学术论文_概述请求":
+    top_k: 3
+    score_threshold: 0.5
+    embedding_model: "bge-tech"
+    reranker_weight: 0.3
+    prompt_template: "summary"
+  
+  # 学术论文 - 比较分析策略
+  "学术论文_比较分析":
+    top_k: 6
+    score_threshold: 0.5
+    embedding_model: "bge-tech"
+    reranker_weight: 0.35
+    prompt_template: "comparison"
+  
+  # 需求文档 - 具体细节查询策略
+  "需求文档_具体细节查询":
+    top_k: 5
+    score_threshold: 0.6
+    embedding_model: "default"
+    reranker_weight: 0.4
+    prompt_template: "requirement_detail"
+  
+  # 需求文档 - 概述请求策略
+  "需求文档_概述请求":
+    top_k: 2
+    score_threshold: 0.5
+    embedding_model: "default"
+    reranker_weight: 0.3
+    prompt_template: "requirement_summary"
+  
+  # 小说 - 具体细节查询策略
+  "小说_具体细节查询":
+    top_k: 3
+    score_threshold: 0.55
+    embedding_model: "bge-base"
+    reranker_weight: 0.3
+    prompt_template: "novel_detail"
+  
+  # 技术文档 - 具体细节查询策略
+  "技术文档_具体细节查询":
+    top_k: 5
+    score_threshold: 0.65
+    embedding_model: "bge-tech"
+    reranker_weight: 0.45
+    prompt_template: "default"
+  
+  # 技术文档 - 故障排查策略
+  "技术文档_故障排查":
+    top_k: 7
+    score_threshold: 0.5
+    embedding_model: "default"
+    reranker_weight: 0.4
+    prompt_template: "default"
+  
+  # 通用策略
+  "通用_具体细节查询":
+    top_k: 4
+    score_threshold: 0.55
+    embedding_model: "default"
+    reranker_weight: 0.35
+    prompt_template: "default"
+  
+  "通用_概述请求":
+    top_k: 3
+    score_threshold: 0.5
+    embedding_model: "default"
+    reranker_weight: 0.3
+    prompt_template: "summary"
+  
+  "通用_比较分析":
+    top_k: 6
+    score_threshold: 0.5
+    embedding_model: "default"
+    reranker_weight: 0.35
+    prompt_template: "comparison"
+  
+  # 报告文档 - 数据查询策略
+  "报告文档_数据查询":
+    top_k: 4
+    score_threshold: 0.6
+    embedding_model: "bge-base"
+    reranker_weight: 0.4
+    prompt_template: "default"
+  
+  # 法律文档 - 条款查询策略
+  "法律文档_条款查询":
+    top_k: 6
+    score_threshold: 0.7
+    embedding_model: "default"
+    reranker_weight: 0.5
+    prompt_template: "default"
+# 提示模板定义
+prompt_templates:
+  citation: "请使用学术引用格式回答，确保每个事实都有来源引用。"
+  summary: "请生成简洁明了的总结，突出核心观点。"
+  comparison: "请对比分析不同文档中的相关内容，列出对比表。"
+  requirement_detail: "请重点关注文档中的'shall'语句和具体要求。"
+  requirement_summary: "请总结文档中的主要功能点和业务需求。"
+  novel_detail: "请基于小说内容回答，保持叙事风格一致。"
+  default: "根据提供的上下文信息回答问题，确保回答准确、简洁。"

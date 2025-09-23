@@ -14,6 +14,9 @@ from PIL import Image
 import pytesseract
 from src.config import global_config
 
+# 导入文档分类器
+from src.document_classifier import document_classifier
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -213,13 +216,57 @@ class DocumentLoader:
             
             split_docs.extend(pdf_split_docs)
             
+            # 为每个文档块添加分类信息
+            classified_docs = []
+            for doc in split_docs:
+                try:
+                    if hasattr(doc, 'metadata') and 'source' in doc.metadata:
+                        file_path = doc.metadata['source']
+                        # 使用文档分类器对文档进行分类
+                        classification_result = document_classifier.classify_document(file_path, doc.page_content)
+                        
+                        # 合并原始元数据和分类信息
+                        enhanced_metadata = {
+                            **doc.metadata,
+                            "document_type": classification_result.get("document_type", "unknown"),
+                            "document_type_name": classification_result.get("document_type_name", "未知文档类型"),
+                            "classification_confidence": classification_result.get("confidence", 0.0),
+                            "classification_method": classification_result.get("classification_method", "unknown"),
+                            "source_file": file_path,
+                            "source_file_name": os.path.basename(file_path)
+                        }
+                        
+                        # 添加分类详情（如果有）
+                        if "details" in classification_result:
+                            enhanced_metadata["classification_details"] = classification_result["details"]
+                        
+                        # 添加从分类器获取的文档元数据
+                        if "metadata" in classification_result:
+                            for key, value in classification_result["metadata"].items():
+                                # 避免覆盖已有键
+                                if key not in enhanced_metadata:
+                                    enhanced_metadata[key] = value
+                        
+                        # 创建带有增强元数据的新文档
+                        from langchain_core.documents import Document
+                        classified_doc = Document(
+                            page_content=doc.page_content,
+                            metadata=enhanced_metadata
+                        )
+                        classified_docs.append(classified_doc)
+                    else:
+                        classified_docs.append(doc)
+                except Exception as e:
+                    logger.error(f"文档分类失败: {str(e)}")
+                    classified_docs.append(doc)  # 如果分类失败，使用原始文档
+            
             # 关键修复：确保即使分割后得到0个文档块，也至少返回原始文档
-            if not split_docs:
+            if not classified_docs:
                 logger.warning(f"文档分割后得到0个文档块，返回原始文档")
                 return documents
             
-            logger.info(f"成功分割所有文档，从 {len(documents)} 个原始文档分割为 {len(split_docs)} 个小块")
-            return split_docs
+            logger.info(f"成功分割并分类所有文档，从 {len(documents)} 个原始文档分割为 {len(classified_docs)} 个小块")
+            return classified_docs
         except Exception as e:
             logger.error(f"分割文档失败: {str(e)}")
             # 作为最后的后备方案，返回原始文档

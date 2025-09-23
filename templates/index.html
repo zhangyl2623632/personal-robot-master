@@ -97,62 +97,120 @@
                     <button id="refresh-status" class="secondary-button" onclick="refreshStatus()">刷新</button>
                 </div>
                 <div class="status-container">
-                    <div class="status-item">
-                        <span class="status-label">API密钥状态:</span>
-                        <span id="api-key-status" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">向量存储中文档数量:</span>
-                        <span id="vector-count" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">文档目录:</span>
-                        <span id="documents-path" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">向量存储路径:</span>
-                        <span id="vector-store-path" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">使用的模型:</span>
-                        <span id="model-name" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">模型提供商:</span>
-                        <span id="model-provider" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item model-selection">
-                        <span class="status-label">切换模型:</span>
-                        <div class="model-selector">
-                            <select id="model-select">
-                                <option value="">请选择模型</option>
-                            </select>
-                            <button id="switch-model-btn" class="secondary-button" onclick="switchModel()">切换模型</button>
+                    <!-- 系统概览组 -->
+                    <div class="status-group">
+                        <div class="status-group-header">
+                            <span class="status-group-icon">📊</span>
+                            <span>系统概览</span>
                         </div>
-                        <div id="model-switch-status" class="model-switch-status"></div>
+                        <div class="status-group-content">
+                            <div class="status-item">
+                                <span class="status-label">系统版本:</span>
+                                <span id="system-version" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">当前时间:</span>
+                                <span id="current-time" class="status-value">加载中...</span>
+                            </div>
+                        </div>
                     </div>
                     
-                    <!-- API密钥状态显示区域 -->
-                    <div id="api-key-status" class="api-key-status-container"></div>
-                    <div class="status-item">
-                        <span class="status-label">系统版本:</span>
-                        <span id="system-version" class="status-value">加载中...</span>
+                    <!-- API状态组 -->
+                    <div class="status-group">
+                        <div class="status-group-header">
+                            <span class="status-group-icon">🔑</span>
+                            <span>API状态</span>
+                        </div>
+                        <div class="status-group-content">
+                            <div class="status-item">
+                                <span class="status-label">默认API密钥状态:</span>
+                                <div id="default-api-key-status" class="status-indicator">
+                                    <span class="status-dot"></span>
+                                    <span>加载中...</span>
+                                </div>
+                            </div>
+                            <!-- API密钥状态显示区域 -->
+                            <div id="api-key-status" class="api-key-status-container"></div>
+                        </div>
                     </div>
-                    <div class="status-item">
-                        <span class="status-label">元数据跟踪文档数:</span>
-                        <span id="vector-store-metadata-count" class="status-value">加载中...</span>
+                    
+                    <!-- 文档与向量存储组 -->
+                    <div class="status-group">
+                        <div class="status-group-header">
+                            <span class="status-group-icon">📚</span>
+                            <span>文档与向量存储</span>
+                        </div>
+                        <div class="status-group-content">
+                            <div class="status-item">
+                                <span class="status-label">文档目录:</span>
+                                <span id="documents-path" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">向量存储路径:</span>
+                                <span id="vector-store-path" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">向量存储中文档数量:</span>
+                                <span id="vector-count" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">元数据跟踪文档数:</span>
+                                <span id="vector-store-metadata-count" class="status-value">加载中...</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="status-item">
-                        <span class="status-label">文档更新间隔:</span>
-                        <span id="document-update-interval" class="status-value">加载中...</span>
+                    
+                    <!-- 文档监控组 -->
+                    <div class="status-group">
+                        <div class="status-group-header">
+                            <span class="status-group-icon">👁️</span>
+                            <span>文档监控</span>
+                        </div>
+                        <div class="status-group-content">
+                            <div class="status-item">
+                                <span class="status-label">文档监控状态:</span>
+                                <div id="document-monitor-status" class="status-indicator">
+                                    <span class="status-dot"></span>
+                                    <span>加载中...</span>
+                                </div>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">监控文件数量:</span>
+                                <span id="monitored-file-count" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">文档更新间隔:</span>
+                                <span id="document-update-interval" class="status-value">加载中...</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="status-item">
-                        <span class="status-label">文档监控状态:</span>
-                        <span id="document-monitor-status" class="status-value">加载中...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">监控文件数量:</span>
-                        <span id="monitored-file-count" class="status-value">加载中...</span>
+                    
+                    <!-- 模型配置组 -->
+                    <div class="status-group">
+                        <div class="status-group-header">
+                            <span class="status-group-icon">🤖</span>
+                            <span>模型配置</span>
+                        </div>
+                        <div class="status-group-content">
+                            <div class="status-item">
+                                <span class="status-label">使用的模型:</span>
+                                <span id="model-name" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">模型提供商:</span>
+                                <span id="model-provider" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">切换模型:</span>
+                                <div class="model-selector">
+                                    <select id="model-select">
+                                        <option value="">请选择模型</option>
+                                    </select>
+                                    <button id="switch-model-btn" class="secondary-button" onclick="switchModel()">切换模型</button>
+                                </div>
+                            </div>
+                            <div id="model-switch-status" class="model-switch-status"></div>
+                        </div>
                     </div>
                 </div>
             </div>

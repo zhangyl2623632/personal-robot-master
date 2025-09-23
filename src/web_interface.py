@@ -133,6 +133,46 @@ def api_chat():
     else:
         return jsonify({'error': '无法生成回答'}), 500
 
+@app.route('/api/chat_with_references', methods=['POST'])
+@handle_exceptions
+@limiter.limit("20 per minute")
+def api_chat_with_references():
+    """带引用的智能问答API，返回回答和相关引用信息"""
+    data = request.json
+    query = data.get('query', '')
+    use_history = data.get('use_history', True)
+    user_id = data.get('user_id')
+    session_id = data.get('session_id')
+    
+    if not query:
+        return jsonify({'error': '查询内容不能为空'}), 400
+    
+    # 使用带引用的智能问答功能
+    result = rag_pipeline.chat_with_references(
+        query=query,
+        use_history=use_history,
+        user_id=user_id,
+        session_id=session_id
+    )
+    
+    if result.get('success', False):
+        return jsonify({
+            'answer': result.get('answer'),
+            'references': result.get('references', []),
+            'intent_type': result.get('intent_type'),
+            'intent_name': result.get('intent_name'),
+            'document_type': result.get('document_type'),
+            'retrieved_documents': result.get('retrieved_documents'),
+            'query_keywords': result.get('query_keywords'),
+            'processing_time': result.get('processing_time')
+        })
+    else:
+        return jsonify({
+            'error': result.get('error', '处理查询失败'),
+            'answer': result.get('answer'),
+            'references': []
+        }), 500
+
 @app.route('/api/clear_history', methods=['POST'])
 @handle_exceptions
 def api_clear_history():

@@ -1,0 +1,99 @@
+# 文档类型配置文件
+# 定义系统支持的文档类型及其特征
+
+# 主要文档类型分类
+document_types:
+  # 学术类文档
+  - id: "academic_paper"
+    name: "学术论文"
+    description: "包含学术研究内容的文档，通常有标题、摘要、引言、方法、结果、结论等结构"
+    file_extensions: [".pdf", ".docx", ".md"]
+    keywords: ["摘要", "引言", "方法", "实验", "结果", "结论", "参考文献", "reference", "abstract", "introduction", "method", "experiment", "result", "conclusion"]
+    metadata_keys: ["doi", "author", "publication_date", "journal", "conference"]
+    min_keywords_match: 3
+    confidence_threshold: 0.75
+
+  # 需求类文档
+  - id: "requirement_doc"
+    name: "需求文档"
+    description: "描述产品或项目需求的文档，通常包含功能需求、非功能需求等"
+    file_extensions: [".docx", ".pdf", ".md", ".xlsx"]
+    keywords: ["需求", "shall", "必须", "功能", "性能", "接口", "约束", "用户故事", "user story", "requirement", "function", "performance", "interface"]
+    metadata_keys: ["project_name", "version", "author", "reviewer", "approval_date"]
+    min_keywords_match: 3
+    confidence_threshold: 0.7
+
+  # 小说类文档
+  - id: "novel_story"
+    name: "小说故事"
+    description: "虚构类文学作品，包含故事情节、人物对话等"
+    file_extensions: [".txt", ".docx", ".md", ".pdf"]
+    keywords: ["第一章", "第二章", "第一回", "第二回", "却说", "只见", "笑道", "想道", "character", "dialogue", "chapter", "scene"]
+    metadata_keys: ["title", "author", "publisher", "publish_date", "genre"]
+    min_keywords_match: 2
+    confidence_threshold: 0.65
+
+  # 技术文档
+  - id: "technical_doc"
+    name: "技术文档"
+    description: "描述技术实现、架构、接口等内容的文档"
+    file_extensions: [".md", ".pdf", ".docx", ".html"]
+    keywords: ["架构", "设计", "实现", "接口", "API", "类", "函数", "模块", "architecture", "design", "implementation", "interface", "class", "function", "module"]
+    metadata_keys: ["version", "author", "update_date", "system_name", "component_name"]
+    min_keywords_match: 3
+    confidence_threshold: 0.7
+
+  # 合同协议
+  - id: "contract_agreement"
+    name: "合同协议"
+    description: "具有法律效力的协议文档，包含条款、责任、义务等"
+    file_extensions: [".pdf", ".docx"]
+    keywords: ["合同", "协议", "条款", "甲方", "乙方", "责任", "义务", "权利", "contract", "agreement", "clause", "party a", "party b", "obligation", "right"]
+    metadata_keys: ["contract_number", "sign_date", "effective_date", "expiry_date", "parties"]
+    min_keywords_match: 3
+    confidence_threshold: 0.8
+
+  # 报告文档
+  - id: "report_doc"
+    name: "报告文档"
+    description: "包含调查、分析、总结等内容的报告类文档"
+    file_extensions: [".pdf", ".docx", ".xlsx"]
+    keywords: ["报告", "总结", "分析", "调查", "建议", "结论", "report", "summary", "analysis", "investigation", "recommendation"]
+    metadata_keys: ["report_title", "author", "date", "department", "project"]
+    min_keywords_match: 2
+    confidence_threshold: 0.65
+
+  # 会议纪要
+  - id: "meeting_minutes"
+    name: "会议纪要"
+    description: "记录会议内容、决议、行动项等的文档"
+    file_extensions: [".docx", ".md", ".txt"]
+    keywords: ["会议纪要", "参会人员", "议题", "决议", "行动项", "负责人", "deadline", "minutes", "attendees", "agenda", "resolution", "action item", "responsible", "due date"]
+    metadata_keys: ["meeting_title", "date", "location", "chairperson", "attendees"]
+    min_keywords_match: 3
+    confidence_threshold: 0.75
+
+# 分类配置
+classification_config:
+  # 文本采样配置
+  text_sampling:
+    sample_size: 5000  # 最大采样字符数
+    sample_sections: 3  # 采样的文本片段数量
+    min_section_length: 200  # 每个采样片段的最小长度
+
+  # 关键词匹配配置
+  keyword_matching:
+    case_sensitive: false  # 是否区分大小写
+    exact_match_only: false  # 是否只进行精确匹配
+    allow_stemming: true  # 是否允许词干提取
+
+  # 元数据提取配置
+  metadata_extraction:
+    enabled: true  # 是否启用元数据提取
+    max_metadata_count: 10  # 每个文档最多提取的元数据数量
+
+  # 机器学习辅助配置
+  ml_assistance:
+    enabled: true  # 是否启用机器学习辅助分类
+    model_path: "models/offline/document_classifier"  # 离线模型路径
+    fallback_to_rules: true  # 当ML模型不可用时是否回退到规则匹配

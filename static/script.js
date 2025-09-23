@@ -154,8 +154,20 @@ function clearChatHistory() {
     }
 }
 
+// 更新当前时间
+function updateCurrentTime() {
+    const now = new Date();
+    const timeElement = document.getElementById('current-time');
+    if (timeElement) {
+        timeElement.textContent = now.toLocaleString('zh-CN');
+    }
+}
+
 // 刷新系统状态
 function refreshStatus() {
+    // 更新当前时间
+    updateCurrentTime();
+    
     // 发送请求到服务器
     fetch('/api/status', {
         method: 'GET',
@@ -168,11 +180,33 @@ function refreshStatus() {
         if (data.error) {
             alert(`获取状态失败: ${data.error}`);
         } else {
-            // 更新状态信息
-            document.getElementById('api-key-status').textContent = data.api_key_valid ? '有效' : '无效或未配置';
-            document.getElementById('api-key-status').style.color = data.api_key_valid ? '#28a745' : '#dc3545';
+            // 更新默认API密钥状态
+            const defaultApiStatusElement = document.getElementById('default-api-key-status');
+            if (defaultApiStatusElement) {
+                const statusDot = defaultApiStatusElement.querySelector('.status-dot');
+                const statusText = defaultApiStatusElement.querySelector('span:last-child');
+                
+                if (data.api_key_valid) {
+                    statusDot.className = 'status-dot valid';
+                    statusText.textContent = '有效';
+                    statusText.style.color = '#28a745';
+                } else {
+                    statusDot.className = 'status-dot invalid';
+                    statusText.textContent = '无效或未配置';
+                    statusText.style.color = '#dc3545';
+                }
+            }
             
-            document.getElementById('vector-count').textContent = data.vector_count;
+            // 更新向量数量
+            const vectorCountElement = document.getElementById('vector-count');
+            if (vectorCountElement) {
+                vectorCountElement.textContent = data.vector_count;
+                // 添加数字动画效果
+                vectorCountElement.classList.add('number-animation');
+                setTimeout(() => {
+                    vectorCountElement.classList.remove('number-animation');
+                }, 500);
+            }
             
             // 显示系统版本
             if (data.version) {
@@ -199,8 +233,21 @@ function refreshStatus() {
             
             // 显示文档监控状态
             if (data.document_monitor) {
-                document.getElementById('document-monitor-status').textContent = data.document_monitor.running ? '运行中' : '已停止';
-                document.getElementById('document-monitor-status').style.color = data.document_monitor.running ? '#28a745' : '#dc3545';
+                const monitorStatusElement = document.getElementById('document-monitor-status');
+                if (monitorStatusElement) {
+                    const statusDot = monitorStatusElement.querySelector('.status-dot');
+                    const statusText = monitorStatusElement.querySelector('span:last-child');
+                    
+                    if (data.document_monitor.running) {
+                        statusDot.className = 'status-dot running';
+                        statusText.textContent = '运行中';
+                        statusText.style.color = '#28a745';
+                    } else {
+                        statusDot.className = 'status-dot stopped';
+                        statusText.textContent = '已停止';
+                        statusText.style.color = '#dc3545';
+                    }
+                }
                 document.getElementById('monitored-file-count').textContent = data.document_monitor.last_checked_count;
             }
             
@@ -270,7 +317,22 @@ function refreshStatus() {
         }
     })
     .catch(error => {
-        alert(`请求失败: ${error.message}`);
+        console.error('刷新状态失败:', error);
+        
+        // 显示错误状态
+        document.getElementById('system-version').textContent = '获取失败';
+        document.getElementById('vector-count').textContent = '获取失败';
+        document.getElementById('current-time').textContent = new Date().toLocaleString('zh-CN');
+        
+        // 设置API密钥状态为错误
+        const defaultApiStatusElement = document.getElementById('default-api-key-status');
+        if (defaultApiStatusElement) {
+            const statusDot = defaultApiStatusElement.querySelector('.status-dot');
+            const statusText = defaultApiStatusElement.querySelector('span:last-child');
+            statusDot.className = 'status-dot invalid';
+            statusText.textContent = '无法连接服务器';
+            statusText.style.color = '#dc3545';
+        }
     });
 }
 
@@ -278,10 +340,18 @@ function refreshStatus() {
 function showModelSwitchStatus(message, isError = false) {
     const statusElement = document.getElementById('model-switch-status');
     statusElement.textContent = message;
-    statusElement.classList.remove('error', 'show');
+    
+    // 移除所有状态类
+    statusElement.classList.remove('error', 'success', 'show');
+    
+    // 添加相应的状态类
     if (isError) {
         statusElement.classList.add('error');
+    } else {
+        statusElement.classList.add('success');
     }
+    
+    // 显示状态信息
     statusElement.classList.add('show');
     
     // 3秒后自动隐藏
