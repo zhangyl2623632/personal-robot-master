@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from src.document_classifier import document_classifier
 from src.query_intent_classifier import query_intent_classifier
 from src.vector_store import vector_store_manager
-from src.llm_client import llm_client
+from src.llm_client import llm_client as global_llm_client
 from src.config import global_config
 
 # 配置日志
@@ -28,6 +28,8 @@ class AdaptiveRAGPipeline:
         self.strategies = {}
         # 存储提示模板配置
         self.prompt_templates = {}
+        # 保存对LLM客户端的引用
+        self.llm_client = global_llm_client
         # 加载策略配置
         self._load_strategies(config_path)
         
@@ -364,7 +366,7 @@ class AdaptiveRAGPipeline:
             global_config.SYSTEM_PROMPT = formatted_prompt['system']
             
             try:
-                llm_result = llm_client.generate_response(formatted_prompt['user'])
+                llm_result = self.llm_client.generate_response(formatted_prompt['user'])
             finally:
                 # 恢复原始的system prompt，避免影响后续查询
                 if hasattr(global_config, 'SYSTEM_PROMPT'):

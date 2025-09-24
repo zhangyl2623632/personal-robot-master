@@ -393,6 +393,15 @@ class BaseLLMClient(ABC):
         except ImportError:
             pass  # 如果rag_pipeline模块不可用，忽略错误
         
+        # 特别更新AdaptiveRAGPipeline中的客户端实例，因为它在初始化时也保存了对旧客户端的引用
+        try:
+            from src.adaptive_rag_pipeline import adaptive_rag_pipeline
+            if hasattr(adaptive_rag_pipeline, 'llm_client'):
+                adaptive_rag_pipeline.llm_client = new_client
+                logger.info("已成功更新AdaptiveRAGPipeline中的客户端实例")
+        except ImportError:
+            pass  # 如果adaptive_rag_pipeline模块不可用，忽略错误
+        
         logger.info(f"客户端已刷新: 新提供商={new_client.provider}, 新模型={new_client.model_name}")
 
     def _call_api(self, messages: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
