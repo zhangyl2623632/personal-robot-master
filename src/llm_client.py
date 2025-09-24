@@ -8,12 +8,17 @@ import logging
 import requests
 import time
 import traceback
+import random
+import hashlib
+from datetime import datetime, timedelta
+from functools import lru_cache, wraps
 from requests.adapters import Retry, HTTPAdapter
 import json
-from typing import List, Dict, Any, Optional, Union, Generator
+from typing import List, Dict, Any, Optional, Union, Generator, Callable, Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from pydantic import BaseModel, ValidationError
 
 # 假设你有一个 config 模块，若没有，可替换为 dotenv 或硬编码
 try:
@@ -35,6 +40,63 @@ except ImportError:
 # 设置日志
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# 添加更详细的日志记录器
+api_logger = logging.getLogger('llm_client.api')
+api_logger.setLevel(logging.INFO)
+
+# 定义响应缓存类
+class ResponseCache:
+    """LLM响应缓存"""
+    def __init__(self, max_size: int = 1000, ttl: int = 3600):
+        self.cache = {}
+        self.max_size = max_size
+        self.ttl = ttl  # 缓存有效期（秒）
+        
+    def _get_cache_key(self, prompt: str, context: Optional[List[str]] = None, history: Optional[List[Dict[str, str]]] = None) -> str:
+        """生成缓存键"""
+        combined = prompt
+        if context:
+            combined += '|||'.join(context)
+        if history:
+            combined += '|||'.join([f"{h['role']}:{h['content']}" for h in history])
+        return hashlib.md5(combined.encode()).hexdigest()
+    
+    def get(self, key: str) -> Optional[str]:
+        """获取缓存项"""
+        if key in self.cache:
+            item = self.cache[key]
+            # 检查是否过期
+            if datetime.now() < item['expires_at']:
+                api_logger.debug(f"缓存命中: {key[:10]}...")
+                return item['response']
+            else:
+                api_logger.debug(f"缓存过期: {key[:10]}...")
+                del self.cache[key]  # 清理过期缓存
+        return None
+    
+    def set(self, key: str, response: str):
+        """设置缓存项"""
+        # 如果缓存已满，移除最旧的项
+        if len(self.cache) >= self.max_size:
+            oldest_key = next(iter(self.cache))
+            del self.cache[oldest_key]
+            api_logger.debug(f"缓存已满，移除最旧项")
+            
+        # 设置缓存项
+        self.cache[key] = {
+            'response': response,
+            'expires_at': datetime.now() + timedelta(seconds=self.ttl)
+        }
+        api_logger.debug(f"缓存设置: {key[:10]}...")
+    
+    def clear(self):
+        """清空缓存"""
+        self.cache.clear()
+        api_logger.debug("缓存已清空")
+
+# 创建全局缓存实例
+response_cache = ResponseCache()
 
 # 定义模型提供商枚举
 class ModelProvider(str, Enum):
@@ -169,6 +231,18 @@ class BaseLLMClient(ABC):
         self.backoff_factor = getattr(self.config, 'RETRY_BACKOFF_FACTOR', 1.5)
         self.status_forcelist = getattr(self.config, 'RETRY_STATUS_FORCELIST', [429, 500, 502, 503, 504])
         
+        # 负载均衡配置
+        self.api_urls = getattr(self.config, f'{self.provider.upper()}_API_URLS', [self._get_default_api_url()])
+        self.current_url_index = 0
+        
+        # 限流配置
+        self.rate_limit_per_minute = getattr(self.config, f'{self.provider.upper()}_RATE_LIMIT', 60)
+        self.request_timestamps = []
+        
+        # 故障转移配置
+        self.failover_enabled = getattr(self.config, 'FAILOVER_ENABLED', True)
+        self.failover_providers = getattr(self.config, 'FAILOVER_PROVIDERS', [])
+        
         # 创建带重试机制的会话
         self.session = self._create_session()
         
@@ -177,21 +251,144 @@ class BaseLLMClient(ABC):
         
         # 健康状态标志
         self._is_healthy = True
+        
+        # 响应计数器
+        self.response_stats = {
+            'total_requests': 0,
+            'successful_requests': 0,
+            'failed_requests': 0,
+            'cache_hits': 0,
+            'total_tokens_used': 0
+        }
+        
+        # 结构化输出配置
+        self.structured_output_enabled = getattr(self.config, 'STRUCTURED_OUTPUT_ENABLED', False)
+        self.structured_output_schema = getattr(self.config, 'STRUCTURED_OUTPUT_SCHEMA', None)
 
+    def _get_default_api_url(self) -> str:
+        """获取默认API URL"""
+        urls = {
+            ModelProvider.DEEPSEEK: "https://api.deepseek.com/v1/chat/completions",
+            ModelProvider.OPENAI: "https://api.openai.com/v1/chat/completions",
+            ModelProvider.MOONSHOT: "https://api.moonshot.cn/v1/chat/completions",
+            ModelProvider.QWEN: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        }
+        return urls.get(self.provider, urls[ModelProvider.DEEPSEEK])
+    
     def _create_session(self) -> requests.Session:
         """创建带重试机制的requests会话"""
         session = requests.Session()
+        # 智能重试策略：指数退避 + 随机抖动
         retry = Retry(
             total=self.max_retries,
             backoff_factor=self.backoff_factor,
             status_forcelist=self.status_forcelist,
             allowed_methods=["POST"],  # 只对POST请求重试
-            raise_on_status=False  # 不抛出异常，让调用者处理状态码
+            raise_on_status=False,  # 不抛出异常，让调用者处理状态码
+            respect_retry_after_header=True  # 尊重Retry-After头部
         )
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20, pool_block=False)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
+        
+        # 添加请求/响应钩子用于日志记录
+        session.hooks['response'].append(self._response_hook)
+        
         return session
+    
+    def _response_hook(self, response, *args, **kwargs):
+        """响应钩子，用于记录详细的API调用信息"""
+        if hasattr(response, 'request'):
+            request = response.request
+            api_logger.debug(f"API调用: {request.method} {request.url}")
+            api_logger.debug(f"状态码: {response.status_code}")
+            
+            # 记录请求体大小（避免记录敏感信息）
+            if request.body:
+                api_logger.debug(f"请求体大小: {len(request.body)} 字节")
+                
+            # 记录响应体大小
+            response_size = len(response.content) if response.content else 0
+            api_logger.debug(f"响应体大小: {response_size} 字节")
+    
+    def _check_rate_limit(self):
+        """检查并应用速率限制"""
+        current_time = time.time()
+        # 移除1分钟前的时间戳
+        self.request_timestamps = [t for t in self.request_timestamps if current_time - t < 60]
+        
+        # 如果达到速率限制，等待
+        if len(self.request_timestamps) >= self.rate_limit_per_minute:
+            wait_time = 60 - (current_time - self.request_timestamps[0])
+            if wait_time > 0:
+                api_logger.info(f"达到速率限制，等待 {wait_time:.2f} 秒")
+                time.sleep(wait_time)
+        
+        # 记录当前请求时间
+        self.request_timestamps.append(current_time)
+    
+    def _get_next_api_url(self) -> str:
+        """获取下一个API URL（轮询负载均衡）"""
+        url = self.api_urls[self.current_url_index]
+        # 更新索引用于下次调用
+        self.current_url_index = (self.current_url_index + 1) % len(self.api_urls)
+        return url
+    
+    def _validate_structured_response(self, response: str, schema: Optional[BaseModel] = None) -> Tuple[bool, Any]:
+        """验证结构化响应是否符合schema"""
+        if not schema:
+            return True, response
+        
+        try:
+            # 尝试从响应中提取JSON
+            json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                data = json.loads(json_str)
+                # 使用Pydantic验证
+                validated_data = schema(**data)
+                return True, validated_data.dict()
+            else:
+                # 尝试直接解析整个响应
+                data = json.loads(response)
+                validated_data = schema(**data)
+                return True, validated_data.dict()
+        except (json.JSONDecodeError, ValidationError, TypeError) as e:
+            api_logger.error(f"结构化响应验证失败: {str(e)}")
+            return False, None
+    
+    def _perform_failover(self) -> bool:
+        """执行故障转移到备用提供商"""
+        if not self.failover_enabled or not self.failover_providers:
+            api_logger.warning("故障转移未启用或未配置备用提供商")
+            return False
+        
+        # 获取下一个可用的提供商
+        for provider_name in self.failover_providers:
+            try:
+                provider = ModelProvider(provider_name.lower())
+                api_logger.info(f"尝试故障转移到提供商: {provider}")
+                
+                # 更新当前提供商配置
+                self.provider = provider
+                # 获取新提供商的API密钥
+                if provider == ModelProvider.DEEPSEEK:
+                    self.api_key = getattr(self.config, 'DEEPSEEK_API_KEY', None) or os.getenv('DEEPSEEK_API_KEY')
+                elif provider == ModelProvider.QWEN:
+                    self.api_key = getattr(self.config, 'QWEN_API_KEY', None) or os.getenv('QWEN_API_KEY')
+                elif provider == ModelProvider.OPENAI:
+                    self.api_key = getattr(self.config, 'OPENAI_API_KEY', None) or os.getenv('OPENAI_API_KEY')
+                elif provider == ModelProvider.MOONSHOT:
+                    self.api_key = getattr(self.config, 'MOONSHOT_API_KEY', None) or os.getenv('MOONSHOT_API_KEY')
+                
+                # 验证新提供商是否可用
+                if self.validate_api_key():
+                    api_logger.info(f"故障转移成功: {provider}")
+                    return True
+            except Exception as e:
+                api_logger.error(f"故障转移到 {provider_name} 失败: {str(e)}")
+                
+        return False
 
     @abstractmethod
     def _get_headers(self) -> Dict[str, str]:
@@ -210,10 +407,36 @@ class BaseLLMClient(ABC):
         prompt: str,
         context: Optional[List[str]] = None,
         history: Optional[List[Dict[str, str]]] = None,
-        stream: bool = False
-    ) -> Union[Optional[str], Generator[str, None, None]]:  # 流式返回生成器
-        """生成回答，带重试机制"""
+        stream: bool = False,
+        cache_enabled: bool = True,
+        structured_schema: Optional[BaseModel] = None
+    ) -> Union[Optional[str], Dict[str, Any], Generator[str, None, None]]:  # 流式返回生成器
+        """生成回答，带重试机制、缓存和结构化输出验证"""
+        # 更新请求计数
+        self.response_stats['total_requests'] += 1
+        
+        # 非流式请求且启用缓存时，尝试从缓存获取
+        if not stream and cache_enabled:
+            cache_key = response_cache._get_cache_key(prompt, context, history)
+            cached_response = response_cache.get(cache_key)
+            if cached_response:
+                self.response_stats['cache_hits'] += 1
+                api_logger.info(f"从缓存返回响应，缓存命中率: {self._get_cache_hit_rate():.2f}%")
+                
+                # 如果需要结构化输出，验证缓存的响应
+                if structured_schema:
+                    is_valid, validated_data = self._validate_structured_response(cached_response, structured_schema)
+                    if is_valid:
+                        return validated_data
+                    # 如果缓存的响应不符合schema，继续获取新响应
+                    api_logger.warning("缓存的响应不符合schema，获取新响应")
+                else:
+                    return cached_response
+        
         try:
+            # 检查速率限制
+            self._check_rate_limit()
+            
             messages = self._build_messages(prompt, context, history)
             
             # 记录开始时间
@@ -228,21 +451,78 @@ class BaseLLMClient(ABC):
                 response_time = time.time() - start_time
                 logger.info(f"生成回答成功，长度: {len(response) if response else 0} 字符，响应时间: {response_time:.2f}秒")
                 
-                # 保存成功的响应
+                # 更新成功计数
                 if response:
+                    self.response_stats['successful_requests'] += 1
                     self._last_successful_response = response
                     self._is_healthy = True
+                    
+                    # 如果启用缓存，保存到缓存
+                    if cache_enabled:
+                        cache_key = response_cache._get_cache_key(prompt, context, history)
+                        response_cache.set(cache_key, response)
+                    
+                    # 处理结构化输出验证
+                    if structured_schema or self.structured_output_enabled:
+                        schema = structured_schema or self.structured_output_schema
+                        if schema:
+                            is_valid, validated_data = self._validate_structured_response(response, schema)
+                            if is_valid:
+                                return validated_data
+                            else:
+                                # 验证失败，尝试再次生成
+                                api_logger.warning("结构化输出验证失败，尝试重新生成")
+                                return self.generate_response(prompt, context, history, stream, False, structured_schema)
                 
                 return response
         except Exception as e:
             logger.error(f"生成回答异常: {str(e)}")
             traceback.print_exc()
+            
+            # 更新失败计数
+            self.response_stats['failed_requests'] += 1
+            
+            # 尝试故障转移
+            if not stream and self.failover_enabled and self._perform_failover():
+                api_logger.info("故障转移后重新尝试请求")
+                return self.generate_response(prompt, context, history, stream, cache_enabled, structured_schema)
+            
             # 返回上次成功的响应作为后备
             if self._last_successful_response:
                 logger.warning("使用上次成功的响应作为后备")
                 return self._last_successful_response
+            
             # 提供默认回复
-            return self._get_default_response(prompt)
+            default_response = self._get_default_response(prompt)
+            # 如果启用结构化输出，为默认回复创建结构化格式
+            if structured_schema:
+                try:
+                    # 尝试创建一个符合schema的最小响应
+                    return {"error": True, "message": default_response}
+                except:
+                    pass
+            return default_response
+    
+    def _get_cache_hit_rate(self) -> float:
+        """计算缓存命中率"""
+        total = self.response_stats['total_requests']
+        if total == 0:
+            return 0.0
+        return (self.response_stats['cache_hits'] / total) * 100
+    
+    def get_response_stats(self) -> Dict[str, int]:
+        """获取响应统计信息"""
+        return self.response_stats.copy()
+    
+    def reset_stats(self):
+        """重置统计信息"""
+        self.response_stats = {
+            'total_requests': 0,
+            'successful_requests': 0,
+            'failed_requests': 0,
+            'cache_hits': 0,
+            'total_tokens_used': 0
+        }
 
     def _get_default_response(self, prompt: str) -> str:
         """获取默认回复，当所有API调用都失败时"""
@@ -259,6 +539,54 @@ class BaseLLMClient(ABC):
             return "根据现有资料，无法回答该问题。当前服务暂时不可用，请稍后再试。"
         else:
             return "根据现有资料，无法回答该问题。当前服务暂时不可用，请稍后再试。"
+            
+    def generate_streaming_response(
+        self,
+        prompt: str,
+        context: Optional[List[str]] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+        cache_enabled: bool = False  # 流式响应默认不使用缓存
+    ) -> Generator[str, None, None]:
+        """生成流式回答，提供对流式响应的直接访问"""
+        # 确保stream参数为True
+        return self.generate_response(prompt, context, history, stream=True, cache_enabled=cache_enabled)
+        
+    def generate_batched_response(
+        self,
+        prompts: List[str],
+        contexts: Optional[List[List[str]]] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+        batch_size: int = 5
+    ) -> List[Optional[str]]:
+        """批量生成回答，优化多个相似查询的处理"""
+        results = []
+        
+        # 如果没有提供contexts，为每个prompt创建空context
+        if contexts is None:
+            contexts = [None] * len(prompts)
+            
+        # 确保contexts和prompts长度一致
+        assert len(prompts) == len(contexts), "prompts和contexts长度必须一致"
+        
+        # 批量处理
+        for i in range(0, len(prompts), batch_size):
+            batch_prompts = prompts[i:i+batch_size]
+            batch_contexts = contexts[i:i+batch_size]
+            
+            # 为每个查询生成回答
+            for j, (prompt, context) in enumerate(zip(batch_prompts, batch_contexts)):
+                try:
+                    result = self.generate_response(prompt, context, history, stream=False)
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"批量处理第{i+j}个查询失败: {str(e)}")
+                    results.append(None)
+            
+            # 避免触发API速率限制
+            if i + batch_size < len(prompts):
+                time.sleep(1)  # 每个批次之间等待1秒
+        
+        return results
 
     def _build_messages(
         self,
@@ -294,28 +622,43 @@ class BaseLLMClient(ABC):
         while attempt < self.max_retries:
             attempt += 1
             try:
-                response = self._call_api(messages)
-                if response and "choices" in response and len(response["choices"]) > 0:
-                    content = response["choices"][0]["message"]["content"]
-                    logger.info(f"API调用成功 (尝试 {attempt}/{self.max_retries})")
-                    return content
-                else:
-                    if attempt < self.max_retries:
-                        wait_time = self.backoff_factor ** (attempt - 1) + 0.5 * (attempt - 1)
-                        logger.warning(f"API响应格式异常，{wait_time:.2f}秒后重试 (尝试 {attempt}/{self.max_retries})")
-                        time.sleep(wait_time)
-                    else:
-                        logger.error(f"API调用失败，已达到最大重试次数 ({self.max_retries})")
-                        return None
-            except Exception as e:
-                if attempt < self.max_retries:
-                    wait_time = self.backoff_factor ** (attempt - 1) + 0.5 * (attempt - 1)
-                    logger.warning(f"API调用异常: {str(e)}, {wait_time:.2f}秒后重试 (尝试 {attempt}/{self.max_retries})")
+                # 智能退避策略：指数退避 + 随机抖动
+                if attempt > 1:
+                    base_wait = self.backoff_factor ** (attempt - 1)
+                    # 添加10-30%的随机抖动，避免多个请求同时重试
+                    jitter = random.uniform(0.1, 0.3)
+                    wait_time = base_wait * (1 + jitter)
+                    api_logger.info(f"等待 {wait_time:.2f} 秒后重试 (尝试 {attempt}/{self.max_retries})")
                     time.sleep(wait_time)
+                
+                response = self._call_api(messages)
+                
+                # 处理特殊错误码
+                if response:
+                    # 提取token使用信息（如果有）
+                    if 'usage' in response and 'total_tokens' in response['usage']:
+                        self.response_stats['total_tokens_used'] += response['usage']['total_tokens']
+                    
+                    if "choices" in response and len(response["choices"]) > 0:
+                        content = response["choices"][0]["message"]["content"]
+                        api_logger.info(f"API调用成功 (尝试 {attempt}/{self.max_retries})")
+                        return content
+                    else:
+                        api_logger.warning(f"API响应缺少choices字段")
                 else:
-                    logger.error(f"API调用异常，已达到最大重试次数 ({self.max_retries}): {str(e)}")
-                    traceback.print_exc()
-                    return None
+                    api_logger.warning(f"API返回空响应")
+                    
+            except requests.exceptions.Timeout:
+                api_logger.error(f"API请求超时 (尝试 {attempt}/{self.max_retries})")
+            except requests.exceptions.ConnectionError:
+                api_logger.error(f"API连接错误 (尝试 {attempt}/{self.max_retries})")
+            except requests.exceptions.RequestException as e:
+                api_logger.error(f"API请求异常 (尝试 {attempt}/{self.max_retries}): {str(e)}")
+            except Exception as e:
+                api_logger.error(f"未预期的异常 (尝试 {attempt}/{self.max_retries}): {str(e)}")
+                traceback.print_exc()
+        
+        api_logger.error(f"API调用失败，已达到最大重试次数 ({self.max_retries})")
         return None
 
     def _call_api_with_retry_stream(self, messages: List[Dict[str, str]]) -> Generator[str, None, None]:
@@ -330,35 +673,68 @@ class BaseLLMClient(ABC):
                 
                 # 如果生成器存在，则逐块yield内容
                 if stream_generator:
+                    chunk_count = 0
                     for chunk in stream_generator:
-                        yield chunk
+                        if chunk:
+                            yield chunk
+                            chunk_count += 1
                     # 如果成功yield完所有内容，返回
-                    logger.info(f"流式API调用成功完成 (尝试 {attempt}/{self.max_retries})")
+                    logger.info(f"流式API调用成功完成 (尝试 {attempt}/{self.max_retries}, 返回{chunk_count}个块)")
                     return
                 
+            except requests.exceptions.Timeout:
+                logger.error(f"流式API请求超时 (尝试 {attempt}/{self.max_retries})")
+                # 尝试生成一个超时提示，然后继续重试
+                if attempt == 1:
+                    yield "[正在连接...]"
+            except requests.exceptions.ConnectionError:
+                logger.error(f"流式API连接错误 (尝试 {attempt}/{self.max_retries})")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"流式API请求异常 (尝试 {attempt}/{self.max_retries}): {str(e)}")
             except Exception as e:
-                logger.error(f"流式API调用异常: {str(e)}")
+                logger.error(f"流式API调用异常 (尝试 {attempt}/{self.max_retries}): {str(e)}")
                 traceback.print_exc()
             
             # 如果不是最后一次尝试，等待并重试
             if attempt < self.max_retries:
-                wait_time = self.backoff_factor ** (attempt - 1) + 0.5 * (attempt - 1)
+                # 智能退避策略：指数退避 + 随机抖动
+                base_wait = self.backoff_factor ** (attempt - 1)
+                jitter = random.uniform(0.1, 0.3)
+                wait_time = base_wait * (1 + jitter)
                 logger.warning(f"流式API调用失败，{wait_time:.2f}秒后重试 (尝试 {attempt}/{self.max_retries})")
                 time.sleep(wait_time)
             else:
                 logger.error(f"流式API调用失败，已达到最大重试次数 ({self.max_retries})")
                 # 提供默认回复
-                yield "很抱歉，我暂时无法为您提供该信息。请稍后再试。"
+                yield "\n很抱歉，我暂时无法为您提供该信息。请稍后再试。"
 
     def validate_api_key(self) -> bool:
         """验证 API 密钥是否有效"""
         if not self.api_key:
+            api_logger.warning("API密钥未设置")
             return False
-        test_messages = [{"role": "user", "content": "Hello"}]
+        
+        test_messages = [{"role": "user", "content": "请返回'验证成功'作为响应"}]
         try:
+            # 临时降低超时时间以加快验证
+            original_timeout = self.timeout
+            self.timeout = 10
             resp = self._call_api(test_messages)
-            return resp is not None
-        except Exception:
+            self.timeout = original_timeout
+            
+            # 检查响应是否有效
+            if resp and "choices" in resp and len(resp["choices"]) > 0:
+                content = resp["choices"][0]["message"]["content"]
+                # 验证响应内容
+                return "验证成功" in content or content.strip() != ""
+            return False
+        except Exception as e:
+            api_logger.error(f"API密钥验证失败: {str(e)}")
+            # 恢复原始超时设置
+            try:
+                self.timeout = original_timeout
+            except:
+                pass
             return False
 
     def is_healthy(self) -> bool:
@@ -381,6 +757,7 @@ class BaseLLMClient(ABC):
             import src.web_interface
             if hasattr(src.web_interface, 'llm_client'):
                 src.web_interface.llm_client = new_client
+                logger.info("已成功更新web_interface中的客户端实例")
         except ImportError:
             pass  # 如果web_interface模块不可用，忽略错误
         
@@ -401,21 +778,43 @@ class BaseLLMClient(ABC):
                 logger.info("已成功更新AdaptiveRAGPipeline中的客户端实例")
         except ImportError:
             pass  # 如果adaptive_rag_pipeline模块不可用，忽略错误
+            
+        # 特别更新Agent中的客户端实例，因为它也需要使用最新的LLM客户端
+        try:
+            from src.agent import agent
+            if hasattr(agent, 'llm_client'):
+                agent.llm_client = new_client
+                logger.info("已成功更新Agent中的客户端实例")
+        except ImportError:
+            pass  # 如果agent模块不可用，忽略错误
         
         logger.info(f"客户端已刷新: 新提供商={new_client.provider}, 新模型={new_client.model_name}")
+        
+        # 返回新的客户端实例，以便调用者可以直接使用
+        return new_client
 
     def _call_api(self, messages: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
         """执行实际的API调用"""
         try:
             # 在调用模型前打印日志，显示使用的模型和模型key的配置情况
-            logger.info(f"准备调用模型 - 提供商: {self.provider}, 模型名称: {self.model_name}")
-            logger.info(f"API密钥状态: {'已配置' if self.api_key else '未配置'}")
+            api_logger.info(f"准备调用模型 - 提供商: {self.provider}, 模型名称: {self.model_name}")
+            api_logger.info(f"API密钥状态: {'已配置' if self.api_key else '未配置'}")
             
-            url = self._get_api_url()
+            # 使用负载均衡获取URL
+            url = self._get_next_api_url()
             headers = self._get_headers()
             payload = self._build_payload(messages, stream=False)
             
-            logger.debug(f"API调用: URL={url}, 消息数量={len(messages)}")
+            # 敏感信息屏蔽
+            sanitized_payload = payload.copy()
+            if 'messages' in sanitized_payload:
+                sanitized_payload['messages'] = [
+                    {k: '(内容已屏蔽)' if k == 'content' else v for k, v in msg.items()}
+                    for msg in sanitized_payload['messages']
+                ]
+            
+            api_logger.debug(f"API调用: URL={url}, 消息数量={len(messages)}")
+            api_logger.debug(f"请求参数: {json.dumps(sanitized_payload, ensure_ascii=False, indent=2)}")
             
             # 发送请求
             response = self.session.post(
@@ -428,17 +827,44 @@ class BaseLLMClient(ABC):
             # 检查响应状态
             if response.status_code == 200:
                 return response.json()
-            else:
-                logger.error(f"API调用失败: 状态码 {response.status_code}")
-                logger.error(f"响应内容: {response.text}")
+            elif response.status_code == 429:
+                # 速率限制处理
+                api_logger.warning(f"API速率限制: 状态码 {response.status_code}")
+                # 检查是否有Retry-After头部
+                retry_after = response.headers.get('Retry-After')
+                if retry_after:
+                    wait_time = int(retry_after)
+                    api_logger.info(f"根据Retry-After头部，等待 {wait_time} 秒")
+                    time.sleep(wait_time)
                 return None
+            elif response.status_code == 401:
+                # 认证错误
+                api_logger.error(f"API认证错误: 状态码 {response.status_code}")
+                api_logger.error(f"请检查API密钥是否正确")
+                return None
+            elif response.status_code >= 500:
+                # 服务器错误
+                api_logger.error(f"API服务器错误: 状态码 {response.status_code}")
+                api_logger.error(f"响应内容: {response.text[:500]}..." if len(response.text) > 500 else response.text)
+                return None
+            else:
+                api_logger.error(f"API调用失败: 状态码 {response.status_code}")
+                api_logger.error(f"响应内容: {response.text[:500]}..." if len(response.text) > 500 else response.text)
+                return None
+        except requests.exceptions.Timeout:
+            api_logger.error(f"API请求超时")
+            raise
+        except requests.exceptions.ConnectionError:
+            api_logger.error(f"API连接错误")
+            raise
         except Exception as e:
-            logger.error(f"API调用异常: {str(e)}")
+            api_logger.error(f"API调用异常: {str(e)}")
             traceback.print_exc()
-            return None
+            raise
+        return None
 
     def _call_api_stream(self, messages: List[Dict[str, str]]) -> Generator[str, None, None]:
-        """执行流式API调用"""
+        """执行流式API调用，支持更健壮的流式响应处理"""
         try:
             url = self._get_api_url()
             headers = self._get_headers()
@@ -456,28 +882,68 @@ class BaseLLMClient(ABC):
             ) as response:
                 if response.status_code == 200:
                     # 处理流式响应
+                    buffer = ""
                     for chunk in response.iter_lines():
                         if chunk:
                             # 移除 'data: ' 前缀并解析JSON
                             try:
                                 chunk_str = chunk.decode('utf-8')
-                                if chunk_str.startswith('data: '):
-                                    chunk_str = chunk_str[6:]
+                                # 处理可能的多个数据块
+                                parts = chunk_str.split('data: ')
+                                for part in parts:
+                                    part = part.strip()
+                                    if part and part != '[DONE]':
+                                        try:
+                                            data = json.loads(part)
+                                            if 'choices' in data and data['choices']:
+                                                delta = data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    # 使用更大的块来优化输出流
+                                                    buffer += delta['content']
+                                                    if len(buffer) >= getattr(self.config, 'STREAMING_CHUNK_SIZE', 50):
+                                                        yield buffer
+                                                        buffer = ""
+                                        except json.JSONDecodeError:
+                                            logger.warning(f"无法解析流式响应块: {part}")
+                                
+                                # 检查是否到达流的末尾
                                 if chunk_str.strip() == '[DONE]':
+                                    # 输出缓冲区中的剩余内容
+                                    if buffer:
+                                        yield buffer
                                     break
-                                data = json.loads(chunk_str)
-                                if 'choices' in data and data['choices']:
-                                    delta = data['choices'][0].get('delta', {})
-                                    if 'content' in delta:
-                                        yield delta['content']
-                            except json.JSONDecodeError:
-                                logger.warning(f"无法解析流式响应块: {chunk_str}")
+                            except Exception as e:
+                                logger.warning(f"处理流式响应块时出错: {str(e)}")
+                    
+                    # 确保缓冲区中的所有内容都被输出
+                    if buffer:
+                        yield buffer
+                    
+                    # 输出一个空字符串以确保流的正确结束
+                    yield ""
+                    
+                elif response.status_code == 429:
+                    # 速率限制处理
+                    logger.warning(f"流式API速率限制: 状态码 {response.status_code}")
+                    yield "[系统繁忙，请稍后再试]"
+                elif response.status_code == 401:
+                    # 认证错误
+                    logger.error(f"流式API认证错误: 状态码 {response.status_code}")
+                    yield "[认证失败，请检查API密钥]"
                 else:
                     logger.error(f"流式API调用失败: 状态码 {response.status_code}")
-                    logger.error(f"响应内容: {response.text}")
+                    logger.error(f"响应内容: {response.text[:500]}..." if len(response.text) > 500 else response.text)
+                    yield "[API调用失败]"
+        except requests.exceptions.Timeout:
+            logger.error(f"流式API请求超时")
+            raise
+        except requests.exceptions.ConnectionError:
+            logger.error(f"流式API连接错误")
+            raise
         except Exception as e:
             logger.error(f"流式API调用异常: {str(e)}")
             traceback.print_exc()
+            raise
 
 # ========================
 # 🚀 DeepSeek 客户端实现

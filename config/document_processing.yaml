@@ -1,0 +1,104 @@
+# 文档处理配置
+# ==============
+
+# 分块策略配置
+chunking_strategies:
+  # 默认分块策略
+  default:
+    chunk_size: 500
+    chunk_overlap: 50
+    separators: ["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""]
+  
+  # 学术论文分块策略
+  academic_paper:
+    chunk_size: 800
+    chunk_overlap: 100
+    separators: ["\n\n", "\n", "。", "！", "？", "；", "\n\t", "", " "]
+    preserve_headings: true
+    max_chunk_size: 1000
+  
+  # 合同文档分块策略
+  contract:
+    chunk_size: 600
+    chunk_overlap: 80
+    separators: ["\n\n", "\n", "。", "！", "？", "；", "条款", "第.*条", "", " "]
+    preserve_sections: true
+  
+  # 技术文档分块策略
+  technical_doc:
+    chunk_size: 700
+    chunk_overlap: 90
+    separators: ["\n\n", "\n", "。", "！", "？", "；", "\t", "", " "]
+    semantic_chunking: true
+
+# 语义分块配置
+semantic_chunking:
+  enabled: true
+  min_chunk_size: 200
+  max_chunk_size: 1000
+  similarity_threshold: 0.3
+  use_embeddings: true
+
+# 元数据提取配置
+metadata_extraction:
+  enabled: true
+  extract_title: true
+  extract_authors: true
+  extract_dates: true
+  extract_keywords: true
+  extract_summary: false
+  max_keywords: 10
+
+# OCR配置
+ocr:
+  enabled: true
+  languages: ["chi_sim", "chi_tra", "eng", "jpn", "kor"]
+  use_layout_analysis: true
+  fallback_to_tesseract: true
+  min_confidence: 0.6
+
+# 图像描述生成配置
+image_captioning:
+  enabled: false
+  model: "BLIP"
+  max_caption_length: 100
+
+# 语言检测配置
+language_detection:
+  enabled: true
+  supported_languages: ["zh", "en", "ja", "ko"]
+  default_language: "zh"
+
+# 文档验证配置
+document_validation:
+  enabled: true
+  max_file_size_mb: 100
+  allowed_extensions: 
+    - ".txt"
+    - ".md"
+    - ".pdf"
+    - ".docx"
+    - ".doc"
+    - ".xlsx"
+    - ".xls"
+    - ".csv"
+    - ".html"
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".gif"
+  check_integrity: true
+  repair_corrupted: false
+
+# 处理并发配置
+concurrency:
+  enabled: true
+  max_workers: 4
+  batch_size: 10
+  timeout_seconds: 300
+
+# 缓存配置
+caching:
+  enabled: true
+  ttl_seconds: 3600
+  max_cache_size_mb: 500

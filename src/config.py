@@ -15,7 +15,7 @@ class Config:
     MOONSHOT_API_KEY = os.environ.get('MOONSHOT_API_KEY', '')
     
     # 当前使用的模型配置
-    MODEL_PROVIDER = "deepseek"  # deepseek, openai, moonshot
+    MODEL_PROVIDER = "deepseek"  # deepseek, openai, moonshot, qwen
     MODEL_NAME = "deepseek-chat"
     MODEL_URL = "https://api.deepseek.com/v1/chat/completions"
     TEMPERATURE = 0.1
@@ -76,6 +76,31 @@ class Config:
     SYSTEM_PROMPT += "如果上下文不包含答案，请直接回答：\"根据现有资料，无法回答该问题。\"\n"
     SYSTEM_PROMPT += "不要添加任何上下文之外的信息，不要凭空猜测。\n"
     SYSTEM_PROMPT += "请用简洁明了的语言回答问题，保持专业和客观。"
+    
+    # Agent 配置
+    USE_AGENT_BY_DEFAULT = os.getenv("USE_AGENT_BY_DEFAULT", "true").lower() == "true"  # 默认使用Agent模式
+    AGENT_MAX_HISTORY_LENGTH = int(os.getenv("AGENT_MAX_HISTORY_LENGTH", "10"))  # 对话历史最大长度
+    AGENT_TOOL_CALL_TIMEOUT = int(os.getenv("AGENT_TOOL_CALL_TIMEOUT", "30"))  # 工具调用超时时间
+    AGENT_MEMORY_PATH = os.getenv("AGENT_MEMORY_PATH", "./agent_memory")  # 代理记忆存储路径
+    
+    # 流式响应配置
+    STREAMING_ENABLED = os.getenv("STREAMING_ENABLED", "true").lower() == "true"  # 默认启用流式响应
+    STREAMING_CHUNK_SIZE = int(os.getenv("STREAMING_CHUNK_SIZE", "50"))  # 流式响应的块大小
+    
+    # 多索引管理配置
+    DEFAULT_INDEX_NAME = os.getenv("DEFAULT_INDEX_NAME", "default")  # 默认索引名称
+    INDEX_BACKUP_ENABLED = os.getenv("INDEX_BACKUP_ENABLED", "true").lower() == "true"  # 是否启用索引备份
+    INDEX_BACKUP_PATH = os.getenv("INDEX_BACKUP_PATH", "./index_backups")  # 索引备份路径
+    
+    # 搜索缓存配置
+    SEARCH_CACHE_ENABLED = os.getenv("SEARCH_CACHE_ENABLED", "true").lower() == "true"  # 是否启用搜索缓存
+    SEARCH_CACHE_SIZE = int(os.getenv("SEARCH_CACHE_SIZE", "100"))  # 搜索缓存大小
+    SEARCH_CACHE_TTL = int(os.getenv("SEARCH_CACHE_TTL", "3600"))  # 搜索缓存过期时间（秒）
+    
+    # 混合检索配置
+    HYBRID_RETRIEVAL_ENABLED = os.getenv("HYBRID_RETRIEVAL_ENABLED", "true").lower() == "true"  # 是否启用混合检索
+    VECTOR_SCORE_WEIGHT = float(os.getenv("VECTOR_SCORE_WEIGHT", "0.7"))  # 向量搜索权重
+    KEYWORD_SCORE_WEIGHT = float(os.getenv("KEYWORD_SCORE_WEIGHT", "0.3"))  # 关键词搜索权重
 
 # 创建配置实例
 global_config = Config()

@@ -6,18 +6,25 @@ import threading
 import functools
 import platform
 import flask
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import asyncio
+import json
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
 from src.rag_pipeline import rag_pipeline
+from src.agent import agent
 from src.config import global_config
 from src.document_monitor import document_monitor
 from src.version_manager import version_manager
+from src.llm_client import llm_client, refresh_client
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# 配置是否默认使用agent模式
+DEFAULT_USE_AGENT = True
 
 app = Flask(__name__, template_folder='../templates', static_folder='../static')
 
@@ -104,16 +111,30 @@ def api_ask():
     """单次提问API，不使用对话历史"""
     data = request.json
     query = data.get('query', '')
+    use_agent = data.get('use_agent', DEFAULT_USE_AGENT)
+    
     if not query:
         return jsonify({'error': '查询内容不能为空'}), 400
 
-    # 使用RAG流水线回答问题，不使用对话历史
-    answer = rag_pipeline.answer_query(query, use_history=False)
-    
-    if answer:
-        return jsonify({'answer': answer})
-    else:
-        return jsonify({'error': '无法生成回答'}), 500
+    try:
+        if use_agent:
+            # 使用agent回答问题
+            answer = agent.generate_response(query, use_history=False)
+        else:
+            # 使用RAG流水线回答问题
+            answer = rag_pipeline.answer_query(query, use_history=False)
+        
+        if answer:
+            return jsonify({
+                'answer': answer,
+                'source': 'agent' if use_agent else 'rag_pipeline',
+                'timestamp': time.time()
+            })
+        else:
+            return jsonify({'error': '无法生成回答'}), 500
+    except Exception as e:
+        logger.error(f"API ask error: {str(e)}")
+        return jsonify({'error': f'处理查询时发生错误: {str(e)}'}), 500
 
 @app.route('/api/chat', methods=['POST'])
 @handle_exceptions
@@ -122,16 +143,161 @@ def api_chat():
     """聊天API，使用对话历史"""
     data = request.json
     query = data.get('query', '')
+    use_agent = data.get('use_agent', DEFAULT_USE_AGENT)
+    user_id = data.get('user_id')
+    session_id = data.get('session_id')
+    
     if not query:
         return jsonify({'error': '查询内容不能为空'}), 400
 
-    # 使用RAG流水线回答问题，使用对话历史
-    answer = rag_pipeline.answer_query(query, use_history=True)
+    try:
+        if use_agent:
+            # 使用agent回答问题，支持对话历史
+            answer = agent.generate_response(query, use_history=True, user_id=user_id, session_id=session_id)
+        else:
+            # 使用RAG流水线回答问题
+            answer = rag_pipeline.answer_query(query, use_history=True)
+        
+        if answer:
+            # 获取统计信息
+            stats = agent.get_conversation_stats() if use_agent else {}
+            return jsonify({
+                'answer': answer,
+                'source': 'agent' if use_agent else 'rag_pipeline',
+                'timestamp': time.time(),
+                'stats': stats
+            })
+        else:
+            return jsonify({'error': '无法生成回答'}), 500
+    except Exception as e:
+        logger.error(f"API chat error: {str(e)}")
+        return jsonify({'error': f'处理查询时发生错误: {str(e)}'}), 500
+
+@app.route('/api/chat/stream', methods=['POST'])
+@handle_exceptions
+@limiter.limit("15 per minute")
+def api_chat_stream():
+    """流式聊天API，使用agent进行流式响应"""
+    data = request.json
+    query = data.get('query', '')
+    use_knowledge = data.get('use_knowledge', True)
+    user_id = data.get('user_id')
+    session_id = data.get('session_id')
     
-    if answer:
-        return jsonify({'answer': answer})
-    else:
-        return jsonify({'error': '无法生成回答'}), 500
+    if not query:
+        return jsonify({'error': '查询内容不能为空'}), 400
+    
+    def stream_response():
+        try:
+            # 定义异步生成器处理流式响应
+            async def async_generator():
+                async for chunk in agent.generate_streaming_response(
+                    query, 
+                    use_history=True,
+                    use_knowledge=use_knowledge,
+                    user_id=user_id,
+                    session_id=session_id
+                ):
+                    if chunk:
+                        # 使用JSON格式发送数据，避免浏览器端解析问题
+                        data = {
+                            'chunk': chunk,
+                            'is_end': False
+                        }
+                        yield f"data: {json.dumps(data)}\n\n"
+            
+            # 运行异步生成器并流式传输
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            for chunk in loop.run_until_complete(async_generator()):
+                yield chunk
+            
+            # 发送结束标记
+            end_data = {
+                'chunk': '',
+                'is_end': True,
+                'stats': agent.get_conversation_stats()
+            }
+            yield f"data: {json.dumps(end_data)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Stream error: {str(e)}")
+            error_data = {
+                'error': str(e),
+                'is_end': True
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
+    
+    # 设置响应头，使用Server-Sent Events协议
+    return Response(
+        stream_response(),
+        content_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        }
+    )
+
+@app.route('/api/ask/stream', methods=['POST'])
+@handle_exceptions
+@limiter.limit("10 per minute")
+def api_ask_stream():
+    """单次提问的流式API，不使用对话历史"""
+    data = request.json
+    query = data.get('query', '')
+    use_knowledge = data.get('use_knowledge', True)
+    
+    if not query:
+        return jsonify({'error': '查询内容不能为空'}), 400
+    
+    def stream_response():
+        try:
+            # 定义异步生成器处理流式响应
+            async def async_generator():
+                async for chunk in agent.generate_streaming_response(
+                    query, 
+                    use_history=False,
+                    use_knowledge=use_knowledge
+                ):
+                    if chunk:
+                        data = {
+                            'chunk': chunk,
+                            'is_end': False
+                        }
+                        yield f"data: {json.dumps(data)}\n\n"
+            
+            # 运行异步生成器并流式传输
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            for chunk in loop.run_until_complete(async_generator()):
+                yield chunk
+            
+            # 发送结束标记
+            end_data = {
+                'chunk': '',
+                'is_end': True
+            }
+            yield f"data: {json.dumps(end_data)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Stream ask error: {str(e)}")
+            error_data = {
+                'error': str(e),
+                'is_end': True
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
+    
+    # 设置响应头，使用Server-Sent Events协议
+    return Response(
+        stream_response(),
+        content_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        }
+    )
 
 @app.route('/api/chat_with_references', methods=['POST'])
 @handle_exceptions
@@ -141,35 +307,64 @@ def api_chat_with_references():
     data = request.json
     query = data.get('query', '')
     use_history = data.get('use_history', True)
+    use_agent = data.get('use_agent', DEFAULT_USE_AGENT)
     user_id = data.get('user_id')
     session_id = data.get('session_id')
     
     if not query:
         return jsonify({'error': '查询内容不能为空'}), 400
     
-    # 使用带引用的智能问答功能
-    result = rag_pipeline.chat_with_references(
-        query=query,
-        use_history=use_history,
-        user_id=user_id,
-        session_id=session_id
-    )
-    
-    if result.get('success', False):
+    try:
+        if use_agent:
+            # 使用agent获取详细回答
+            result = agent.generate_response_with_details(
+                query=query,
+                use_history=use_history,
+                user_id=user_id,
+                session_id=session_id
+            )
+            
+            return jsonify({
+                'answer': result.get('answer'),
+                'references': result.get('references', []),
+                'intent_type': result.get('intent_type'),
+                'retrieved_documents': result.get('retrieved_documents', []),
+                'processing_time': result.get('processing_time'),
+                'source': 'agent',
+                'stats': agent.get_conversation_stats()
+            })
+        else:
+            # 使用传统的带引用的智能问答功能
+            result = rag_pipeline.chat_with_references(
+                query=query,
+                use_history=use_history,
+                user_id=user_id,
+                session_id=session_id
+            )
+            
+            if result.get('success', False):
+                return jsonify({
+                    'answer': result.get('answer'),
+                    'references': result.get('references', []),
+                    'intent_type': result.get('intent_type'),
+                    'intent_name': result.get('intent_name'),
+                    'document_type': result.get('document_type'),
+                    'retrieved_documents': result.get('retrieved_documents'),
+                    'query_keywords': result.get('query_keywords'),
+                    'processing_time': result.get('processing_time'),
+                    'source': 'rag_pipeline'
+                })
+            else:
+                return jsonify({
+                    'error': result.get('error', '处理查询失败'),
+                    'answer': result.get('answer'),
+                    'references': [],
+                    'source': 'rag_pipeline'
+                }), 500
+    except Exception as e:
+        logger.error(f"API chat_with_references error: {str(e)}")
         return jsonify({
-            'answer': result.get('answer'),
-            'references': result.get('references', []),
-            'intent_type': result.get('intent_type'),
-            'intent_name': result.get('intent_name'),
-            'document_type': result.get('document_type'),
-            'retrieved_documents': result.get('retrieved_documents'),
-            'query_keywords': result.get('query_keywords'),
-            'processing_time': result.get('processing_time')
-        })
-    else:
-        return jsonify({
-            'error': result.get('error', '处理查询失败'),
-            'answer': result.get('answer'),
+            'error': f'处理查询时发生错误: {str(e)}',
             'references': []
         }), 500
 
@@ -177,8 +372,161 @@ def api_chat_with_references():
 @handle_exceptions
 def api_clear_history():
     """清空对话历史API"""
-    rag_pipeline.clear_conversation_history()
-    return jsonify({'success': True})
+    data = request.json or {}
+    use_agent = data.get('use_agent', DEFAULT_USE_AGENT)
+    user_id = data.get('user_id')
+    session_id = data.get('session_id')
+    
+    try:
+        if use_agent:
+            agent.clear_chat_history(user_id=user_id, session_id=session_id)
+            agent.reset_conversation(user_id=user_id, session_id=session_id)
+        else:
+            rag_pipeline.clear_conversation_history()
+        return jsonify({'success': True, 'source': 'agent' if use_agent else 'rag_pipeline'})
+    except Exception as e:
+        logger.error(f"API clear_history error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== 知识库管理API =====
+
+@app.route('/api/index/create', methods=['POST'])
+@handle_exceptions
+@limiter.limit("5 per hour")
+def api_create_index():
+    """创建新索引API"""
+    data = request.json
+    index_name = data.get('index_name')
+    
+    if not index_name:
+        return jsonify({'error': '索引名称不能为空'}), 400
+    
+    try:
+        result = agent._create_index(index_name)
+        return jsonify({'success': True, 'message': result})
+    except Exception as e:
+        logger.error(f"API create_index error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/index/switch', methods=['POST'])
+@handle_exceptions
+@limiter.limit("10 per hour")
+def api_switch_index():
+    """切换索引API"""
+    data = request.json
+    index_name = data.get('index_name')
+    
+    if not index_name:
+        return jsonify({'error': '索引名称不能为空'}), 400
+    
+    try:
+        result = agent._switch_index(index_name)
+        if "成功" in result:
+            return jsonify({'success': True, 'message': result})
+        else:
+            return jsonify({'error': result}), 400
+    except Exception as e:
+        logger.error(f"API switch_index error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/index/optimize', methods=['POST'])
+@handle_exceptions
+@limiter.limit("5 per day")
+def api_optimize_index():
+    """优化索引API"""
+    data = request.json or {}
+    index_name = data.get('index_name')  # 可选，默认当前索引
+    
+    try:
+        result = agent._optimize_index(index_name)
+        return jsonify({'success': True, 'message': result})
+    except Exception as e:
+        logger.error(f"API optimize_index error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/index/list', methods=['GET'])
+@handle_exceptions
+def api_list_indices():
+    """列出所有索引API"""
+    try:
+        indices = agent._list_indices()
+        return jsonify({'indices': indices, 'current_index': agent._get_current_index()})
+    except Exception as e:
+        logger.error(f"API list_indices error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/search', methods=['POST'])
+@handle_exceptions
+@limiter.limit("30 per minute")
+def api_search():
+    """直接搜索知识库API"""
+    data = request.json
+    query = data.get('query', '')
+    limit = data.get('limit', 5)
+    filter_metadata = data.get('filter', {})
+    
+    if not query:
+        return jsonify({'error': '查询内容不能为空'}), 400
+    
+    try:
+        results = agent._search_knowledge(query, limit=limit, filter_metadata=filter_metadata)
+        return jsonify({
+            'results': results,
+            'total': len(results),
+            'query': query
+        })
+    except Exception as e:
+        logger.error(f"API search error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== 统计信息API =====
+
+@app.route('/api/stats/conversation', methods=['GET'])
+@handle_exceptions
+def api_conversation_stats():
+    """获取对话统计信息API"""
+    try:
+        stats = agent.get_conversation_stats()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"API conversation_stats error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/stats/knowledge', methods=['GET'])
+@handle_exceptions
+def api_knowledge_stats():
+    """获取知识库统计信息API"""
+    try:
+        stats = agent._get_knowledge_stats()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"API knowledge_stats error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== 工具使用API =====
+
+@app.route('/api/tools/execute', methods=['POST'])
+@handle_exceptions
+@limiter.limit("20 per minute")
+def api_execute_tool():
+    """执行工具API"""
+    data = request.json
+    tool_name = data.get('tool_name')
+    tool_params = data.get('params', {})
+    
+    if not tool_name:
+        return jsonify({'error': '工具名称不能为空'}), 400
+    
+    try:
+        result = agent._execute_tool(tool_name, **tool_params)
+        return jsonify({
+            'success': True,
+            'result': result,
+            'tool': tool_name
+        })
+    except Exception as e:
+        logger.error(f"API execute_tool error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/status', methods=['GET'])
 @handle_exceptions
@@ -189,7 +537,8 @@ def api_status():
         'document_loader': True,
         'vector_store': True,
         'llm_client': True,
-        'rag_pipeline': True
+        'rag_pipeline': True,
+        'agent': True  # 添加agent组件健康检查
     }
     
     # 尝试检查各个组件的可用性
@@ -220,6 +569,14 @@ def api_status():
         logger.error(f"LLM client health check failed: {str(e)}")
         health_status['llm_client'] = False
     
+    # 检查agent健康状态
+    try:
+        if not hasattr(agent, 'generate_response'):
+            health_status['agent'] = False
+    except Exception as e:
+        logger.error(f"Agent health check failed: {str(e)}")
+        health_status['agent'] = False
+    
     # 系统整体状态
     overall_status = all(health_status.values())
     
@@ -239,6 +596,23 @@ def api_status():
     elif current_model_provider == 'moonshot':
         current_api_key_configured = bool(global_config.MOONSHOT_API_KEY)
     
+    # 获取agent配置和统计信息
+    agent_stats = {}
+    try:
+        agent_stats = agent.get_conversation_stats()
+    except Exception:
+        pass
+    
+    # 获取索引信息
+    indices_info = {}
+    try:
+        indices_info = {
+            'indices': agent._list_indices(),
+            'current_index': agent._get_current_index()
+        }
+    except Exception:
+        pass
+    
     status = {
         'api_key_valid': rag_pipeline.validate_api_key(),
         'vector_count': rag_pipeline.get_vector_count(),
@@ -248,7 +622,8 @@ def api_status():
             'model_provider': global_config.MODEL_PROVIDER,
             'vector_store_path': global_config.VECTOR_STORE_PATH,
             'documents_path': global_config.DOCUMENTS_PATH,
-            'document_update_interval': global_config.DOCUMENT_UPDATE_INTERVAL
+            'document_update_interval': global_config.DOCUMENT_UPDATE_INTERVAL,
+            'default_use_agent': DEFAULT_USE_AGENT
         },
         'document_monitor': document_monitor.get_monitoring_status(),
         'supported_models': global_config.SUPPORTED_MODELS,
@@ -272,6 +647,17 @@ def api_status():
             'python_version': platform.python_version() if 'platform' in globals() else 'unknown',
             'flask_version': flask.__version__ if 'flask' in globals() else 'unknown',
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        },
+        'agent_stats': agent_stats,
+        'vector_store': {
+            'indices': indices_info,
+            'vector_count': rag_pipeline.get_vector_count()
+        },
+        'features': {
+            'streaming': True,
+            'agent': True,
+            'multi_index': True,
+            'tool_usage': True
         }
     }
     return jsonify(status)
@@ -302,9 +688,11 @@ def api_switch_model():
     global_config.MODEL_NAME = model_config['name']
     global_config.MODEL_URL = model_config['url']
     
-    # 刷新LLM客户端
-    from src.llm_client import llm_client
-    llm_client.refresh_client()
+    # 使用全局refresh_client函数刷新所有模块的客户端
+    refresh_client()
+    
+    # 同时更新agent的LLM客户端
+    agent.update_llm_client()
     
     logger.info(f"已切换模型到: {model_provider} - {model_config['name']}")
     
