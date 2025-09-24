@@ -11,17 +11,19 @@
 - **文档自动解析**：智能提取文档内容，保留结构化信息和重要上下文
 - **文档批量处理**：支持批量导入和处理目录下的所有文档，提高效率
 - **文档监控更新**：自动监控指定目录，实时检测并处理新增或修改的文档
+- **文档分类系统**：自动识别和分类不同类型的文档，优化检索策略
 
 ### 检索与问答能力
 - **高效向量检索**：基于Chroma向量数据库实现快速、准确的相似度搜索
-- **检索增强生成（RAG）**：结合检索到的文档片段和大语言模型能力，生成准确、相关的回答
-- **重排序优化**：使用专业重排序模型进一步提升检索结果质量
+- **自适应RAG技术**：根据文档类型和查询意图动态选择最优RAG策略，提高回答质量
+- **重排序优化**：使用专业重排序模型（BAAI/bge-reranker-large）进一步提升检索结果质量
 - **上下文管理**：智能处理多轮对话，保持上下文一致性
+- **多语言支持**：特别优化了中英文文档间的查询和回答能力
 
 ### 用户体验
 - **直观Web界面**：提供美观、易用的Web交互界面，无需编程知识
 - **实时响应**：支持流式输出，提供流畅的对话体验
-- **多模型支持**：内置支持DeepSeek、OpenAI、Moonshot、Qwen等多种主流大语言模型
+- **多模型支持**：内置支持DeepSeek、OpenAI、Qwen、Moonshot等多种主流大语言模型
 - **本地模型支持**：支持使用BAAI/bge-large-zh-v1.5嵌入模型和BAAI/bge-reranker-large重排序模型的离线使用
 
 ### 扩展与管理
@@ -32,8 +34,6 @@
 
 ## 技术架构
 
-![系统架构图](https://example.com/architecture.png)（注：可根据实际架构图替换此链接）
-
 ### 核心组件
 
 1. **DocumentLoader**（文档加载器）
@@ -41,38 +41,51 @@
    - 支持文档分块、元数据提取
    - 自动处理文档编码和格式转换
 
-2. **VectorStoreManager**（向量存储管理器）
+2. **DocumentClassifier**（文档分类器）
+   - 自动识别文档类型和内容特征
+   - 为不同类型文档应用不同的处理策略
+   - 支持自定义文档类型配置
+
+3. **QueryIntentClassifier**（查询意图分类器）
+   - 分析用户查询意图和需求类型
+   - 为不同类型的查询选择最佳处理路径
+   - 支持复杂查询意图的识别
+
+4. **VectorStoreManager**（向量存储管理器）
    - 管理Chroma向量数据库的创建和维护
    - 负责文档向量化和向量检索
    - 支持向量库的优化和压缩
 
-3. **LLMClient**（大语言模型客户端）
+5. **LLMClient**（大语言模型客户端）
    - 封装各种大语言模型的API调用
    - 支持流式和非流式响应处理
    - 负责提示词工程和模型参数优化
+   - 支持动态模型切换
 
-4. **RAGPipeline**（检索增强生成管道）
+6. **AdaptiveRAGPipeline**（自适应RAG流水线）
+   - 根据文档类型和查询意图动态选择最优RAG策略
    - 整合文档检索和大语言模型生成
    - 实现检索结果重排序和上下文构建
    - 优化生成回答的相关性和准确性
 
-5. **WebInterface**（Web界面）
+7. **WebInterface**（Web界面）
    - 基于Flask框架实现的Web服务
    - 提供用户友好的交互界面
    - 处理前端请求和后端响应
+   - 支持模型切换和系统状态监控
 
-6. **DocumentMonitor**（文档监控器）
+8. **DocumentMonitor**（文档监控器）
    - 实时监控指定目录的文件变化
    - 自动处理新增或修改的文档
    - 支持定时扫描和事件触发模式
 
 ### 技术栈
 
-- **后端**：Python 3.8+, Flask, FastAPI
+- **后端**：Python 3.8+, Flask
 - **向量数据库**：Chroma
 - **文档处理**：python-docx, PyPDF2, python-pptx, pandas
-- **自然语言处理**：Transformers, LangChain
-- **大语言模型**：DeepSeek, OpenAI, Moonshot, Qwen
+- **自然语言处理**：Transformers, SentenceTransformers, LangChain
+- **大语言模型**：DeepSeek, OpenAI, Qwen, Moonshot
 - **前端**：HTML, CSS, JavaScript
 
 ## 环境要求
@@ -151,10 +164,9 @@ DEEPSEEK_API_KEY=your_api_key_here
 OPENAI_API_KEY=your_api_key_here
 MOONSHOT_API_KEY=your_api_key_here
 QWEN_API_KEY=your_api_key_here
-DASHSCOPE_API_KEY=your_api_key_here
 
 # 模型选择配置
-MODEL_PROVIDER=deepseek  # 可选: deepseek, openai, moonshot, qwen_dashscope
+MODEL_PROVIDER=deepseek  # 可选: deepseek, openai, moonshot, qwen
 MODEL_NAME=deepseek-chat
 
 # 向量存储配置
@@ -166,7 +178,7 @@ EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
 RERANKER_MODEL=BAAI/bge-reranker-large
 
 # 生成参数配置
-TEMPERATURE=0.7
+TEMPERATURE=0.1
 MAX_TOKENS=2048
 TOP_P=0.9
 
@@ -209,6 +221,7 @@ CHUNK_OVERLAP=100
    - **文档上传**：通过上传按钮添加新的文档到系统
    - **对话历史**：查看和管理之前的对话
    - **系统状态**：查看向量库大小、模型连接状态等系统信息
+   - **模型切换**：在支持的大语言模型之间切换
 
 ### 通过命令行管理
 
@@ -218,7 +231,7 @@ CHUNK_OVERLAP=100
 
 ```bash
 # 添加单个文件
-src/main.py add --path data/example.docx
+python src/main.py add --path data/example.docx
 
 # 添加整个目录下的所有文件
 python src/main.py add --path data/
@@ -266,14 +279,22 @@ python rebuild_vector_store.py
 ```
 personal-robot/
 ├── src/                 # 源代码目录
+│   ├── adaptive_rag_pipeline.py  # 自适应RAG流水线实现
 │   ├── config.py        # 全局配置管理
-│   ├── document_loader.py  # 文档加载与处理模块
-│   ├── document_monitor.py # 文档监控与自动更新
-│   ├── vector_store.py  # 向量存储管理与检索
+│   ├── document_classifier.py    # 文档分类器
+│   ├── document_loader.py        # 文档加载与处理模块
+│   ├── document_monitor.py       # 文档监控与自动更新
 │   ├── llm_client.py    # 大语言模型客户端实现
-│   ├── rag_pipeline.py  # RAG流程核心实现
 │   ├── main.py          # 命令行入口
+│   ├── query_intent_classifier.py # 查询意图分类器
+│   ├── rag_pipeline.py  # RAG流程核心实现
+│   ├── vector_store.py  # 向量存储管理与检索
+│   ├── version_manager.py # 版本管理器
 │   └── web_interface.py # Web服务入口
+├── config/              # 配置文件目录
+│   ├── document_types.yaml      # 文档类型配置
+│   ├── multilingual_rag_prompts.yaml # 多语言RAG提示词配置
+│   └── rag_strategies.yaml      # RAG策略配置
 ├── data/                # 默认文档存放目录
 ├── vector_store/        # 向量存储数据目录
 ├── models/              # 模型存放目录
@@ -283,6 +304,13 @@ personal-robot/
 ├── static/              # Web静态资源
 │   ├── style.css        # 样式表
 │   └── script.js        # JavaScript脚本
+├── tests/               # 测试代码目录
+│   ├── unit/            # 单元测试
+│   ├── integration/     # 集成测试
+│   ├── performance/     # 性能测试
+│   ├── real_world/      # 真实场景测试
+│   └── system/          # 系统测试
+├── test_data/           # 测试数据目录
 ├── .env                 # 环境变量配置
 ├── .env.example         # 配置示例
 ├── requirements.txt     # 项目依赖列表
@@ -298,22 +326,21 @@ personal-robot/
 ### 大语言模型配置
 
 | 配置项 | 说明 | 默认值 | 是否必需 |
-|-------|------|-------|---------|
+|-------|------|-------|--------|
 | `DEEPSEEK_API_KEY` | DeepSeek大语言模型API密钥 | - | 至少需要一个API密钥 |
 | `OPENAI_API_KEY` | OpenAI大语言模型API密钥 | - | 可选 |
 | `MOONSHOT_API_KEY` | 月之暗面大语言模型API密钥 | - | 可选 |
 | `QWEN_API_KEY` | 通义千问大语言模型API密钥 | - | 可选 |
-| `DASHSCOPE_API_KEY` | 阿里云DashScope服务API密钥 | - | 可选 |
 | `MODEL_PROVIDER` | 选择使用的模型提供商 | deepseek | 必需 |
 | `MODEL_NAME` | 大语言模型名称 | deepseek-chat | 必需 |
-| `TEMPERATURE` | 生成温度，控制输出随机性 | 0.7 | 可选 |
+| `TEMPERATURE` | 生成温度，控制输出随机性 | 0.1 | 可选 |
 | `MAX_TOKENS` | 最大生成token数 | 2048 | 可选 |
 | `TOP_P` | 核采样参数 | 0.9 | 可选 |
 
 ### 文档与向量存储配置
 
 | 配置项 | 说明 | 默认值 | 是否必需 |
-|-------|------|-------|---------|
+|-------|------|-------|--------|
 | `VECTOR_STORE_PATH` | 向量存储路径 | ./vector_store | 必需 |
 | `DOCUMENTS_PATH` | 文档存放路径 | ./data | 必需 |
 | `EMBEDDING_MODEL` | 嵌入模型名称 | BAAI/bge-large-zh-v1.5 | 必需 |
@@ -322,6 +349,24 @@ personal-robot/
 | `TOP_R` | 重排序后保留的文档数 | 2 | 可选 |
 | `CHUNK_SIZE` | 文档分块大小 | 1000 | 可选 |
 | `CHUNK_OVERLAP` | 文档块之间的重叠大小 | 100 | 可选 |
+
+## 自适应RAG策略
+
+项目实现了15种不同的RAG策略，根据文档类型和查询意图自动选择最合适的策略。主要策略包括：
+
+- **多语言RAG策略**：优化中英文文档间的查询和回答能力
+- **学术论文策略**：针对学术内容的特殊处理，支持引用格式输出
+- **技术文档策略**：增强技术文档的理解和解释能力
+- **需求文档策略**：聚焦于文档中的具体要求和功能点
+- **小说内容策略**：保持叙事风格一致性的回答生成
+
+每种策略可配置以下参数：
+- `embedding_model`：使用的嵌入模型
+- `prompt_template`：使用的提示模板
+- `reranker_weight`：重排序权重
+- `score_threshold`：相关性分数阈值
+- `top_k`：检索文档数量
+- `max_context_length`：最大上下文长度
 
 ## 离线模型使用指南
 
@@ -363,11 +408,35 @@ python src/main.py monitor --path data/
 
 ### 自定义提示词
 
-您可以在`src/llm_client.py`中自定义系统提示词，以优化模型的回答质量。默认提示词设计用于增强文档问答的准确性和相关性。
+您可以在`config/rag_strategies.yaml`文件中自定义各种提示模板，以优化模型的回答质量。系统已预置12种不同场景的提示模板。
 
 ### 批量操作脚本
 
-项目提供了`rebuild_vector_store.py`脚本，用于一键重建向量存储。您也可以根据需要编写自己的批量操作脚本。
+项目提供了多个批量操作脚本：
+- `rebuild_vector_store.py`：一键重建向量存储
+- `check_vector_store.py`：检查向量存储状态
+- `clear_vector_store.py`：清空向量存储
+- `verify_vector_store.py`：验证向量存储内容
+
+## 测试系统
+
+项目包含完善的测试框架，涵盖以下测试类型：
+
+- **单元测试**：测试各个模块的基本功能
+- **集成测试**：测试模块间的交互
+- **性能测试**：测试系统在不同负载下的表现
+- **真实场景测试**：在模拟真实用户场景下测试系统
+
+运行测试：
+
+```bash
+# 运行所有测试
+pytest
+
+# 运行特定类型的测试
+pytest tests/unit/
+pytest tests/integration/
+```
 
 ## 注意事项
 
@@ -389,7 +458,7 @@ python src/main.py monitor --path data/
    
 4. **多语言支持**
    
-   系统主要针对中英文文档优化，对于其他语言可能需要调整模型配置。
+   系统特别优化了中英文文档的处理，对于其他语言可能需要调整模型配置。
 
 ## 故障排除
 
@@ -406,9 +475,9 @@ python src/main.py monitor --path data/
 - 对于加密文档，需要先解密
 
 **问题：问答结果不准确**
-- 尝试增加`TOP_K`值，获取更多相关文档
+- 尝试调整`TOP_K`和`score_threshold`值
 - 优化文档质量，确保内容清晰、结构化
-- 调整提示词，引导模型更准确地回答问题
+- 检查是否选择了合适的RAG策略
 
 **问题：内存不足错误**
 - 减少同时处理的文档数量
@@ -419,15 +488,6 @@ python src/main.py monitor --path data/
 - 检查服务是否正常启动
 - 确认端口5000未被其他程序占用
 - 尝试使用不同的浏览器访问
-
-### 获取更多帮助
-
-如果您遇到的问题不在上述列表中，可以尝试以下方法：
-
-1. 检查系统日志，查找详细错误信息
-2. 确认所有依赖包已正确安装
-3. 尝试重新创建虚拟环境
-4. 查看项目的GitHub仓库（如果有）中的Issues部分
 
 ## 未来规划
 
@@ -461,9 +521,10 @@ python src/main.py monitor --path data/
 ### v1.0.1 (2024-09-16)
 - 优化向量存储管理和检索效率
 - 改进文档处理流程，提高解析准确性
-- 清理冗余文件，优化项目结构
+- 实现自适应RAG流水线，支持15种RAG策略
 - 增强系统稳定性和错误处理能力
 - 更新依赖包版本
+- 修复模型切换功能，确保正确更新LLM客户端实例
 
 ### v1.0.0 (2024-09-15)
 - 首次发布个人智能问答机器人
@@ -478,6 +539,7 @@ python src/main.py monitor --path data/
 
 - [Chroma](https://www.trychroma.com/) - 高效的向量数据库
 - [Transformers](https://huggingface.co/transformers/) - 自然语言处理模型库
+- [SentenceTransformers](https://www.sbert.net/) - 句子嵌入模型库
 - [Flask](https://flask.palletsprojects.com/) - Web框架
 - [BAAI](https://www.baai.ac.cn/) - 提供的开源嵌入和重排序模型
 - 各大语言模型提供商的API支持
