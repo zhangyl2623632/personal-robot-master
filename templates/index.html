@@ -212,6 +212,31 @@
                             <div id="model-switch-status" class="model-switch-status"></div>
                         </div>
                     </div>
+                    
+                    <!-- 模式配置组 -->
+                    <div class="status-group">
+                        <div class="status-group-header">
+                            <span class="status-group-icon">🔄</span>
+                            <span>问答模式</span>
+                        </div>
+                        <div class="status-group-content">
+                            <div class="status-item">
+                                <span class="status-label">当前模式:</span>
+                                <span id="current-mode" class="status-value">加载中...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">切换模式:</span>
+                                <div class="mode-selector">
+                                    <select id="mode-select">
+                                        <option value="agent">Agent模式</option>
+                                        <option value="rag">RAG模式</option>
+                                    </select>
+                                    <button id="switch-mode-btn" class="secondary-button" onclick="switchMode()">切换模式</button>
+                                </div>
+                            </div>
+                            <div id="mode-switch-status" class="mode-switch-status"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>

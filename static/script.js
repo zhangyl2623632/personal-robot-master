@@ -5,7 +5,26 @@ window.addEventListener('DOMContentLoaded', function() {
     
     // 初始化文件上传功能
     initFileUpload();
+    
+    // 初始化模式选择器
+    initModeSelector();
 });
+
+// 初始化模式选择器
+function initModeSelector() {
+    // 默认为Agent模式
+    localStorage.setItem('useAgent', 'true');
+    const currentModeElement = document.getElementById('current-mode');
+    const modeSelectElement = document.getElementById('mode-select');
+    
+    if (currentModeElement) {
+        currentModeElement.textContent = 'Agent模式';
+    }
+    
+    if (modeSelectElement) {
+        modeSelectElement.value = 'agent';
+    }
+}
 
 // 切换选项卡
 function switchTab(tabName) {
@@ -42,13 +61,19 @@ function sendAskQuery() {
     // 添加加载中消息
     const loadingMessageElement = addMessageToUI(messagesContainer, 'loading', '正在思考...');
     
+    // 获取当前模式
+    const useAgent = localStorage.getItem('useAgent') === 'true';
+    
     // 发送请求到服务器
     fetch('/api/ask', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ query: query })
+        body: JSON.stringify({ 
+            query: query, 
+            use_agent: useAgent 
+        })
     })
     .then(response => response.json())
     .then(data => {
@@ -95,13 +120,19 @@ function sendChatQuery() {
     // 添加加载中消息
     const loadingMessageElement = addMessageToUI(messagesContainer, 'loading', '正在思考...');
     
+    // 获取当前模式
+    const useAgent = localStorage.getItem('useAgent') === 'true';
+    
     // 发送请求到服务器
     fetch('/api/chat', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ query: query })
+        body: JSON.stringify({ 
+            query: query, 
+            use_agent: useAgent 
+        })
     })
     .then(response => response.json())
     .then(data => {
@@ -195,6 +226,19 @@ function refreshStatus() {
                     statusText.textContent = '无效或未配置';
                     statusText.style.color = '#dc3545';
                 }
+            }
+            
+            // 更新问答模式显示
+            const useAgent = localStorage.getItem('useAgent') === 'true';
+            const currentModeElement = document.getElementById('current-mode');
+            const modeSelectElement = document.getElementById('mode-select');
+            
+            if (currentModeElement) {
+                currentModeElement.textContent = useAgent ? 'Agent模式' : 'RAG模式';
+            }
+            
+            if (modeSelectElement) {
+                modeSelectElement.value = useAgent ? 'agent' : 'rag';
             }
             
             // 更新向量数量
@@ -398,7 +442,8 @@ function switchModel() {
             showModelSwitchStatus(`切换失败: ${data.error}`, true);
         } else {
             console.log('切换模型成功:', data);
-            showModelSwitchStatus(data.message);
+            showModelSwitchStatus('模型切换成功，已刷新系统状态', false);
+            
             // 刷新系统状态，显示新的模型信息
             refreshStatus();
         }
@@ -413,6 +458,67 @@ function switchModel() {
         switchButton.textContent = '切换模型';
         modelSelect.disabled = false;
     });
+}
+
+// 切换问答模式
+function switchMode() {
+    const modeSelect = document.getElementById('mode-select');
+    const switchButton = document.getElementById('switch-mode-btn');
+    const modeSwitchStatus = document.getElementById('mode-switch-status');
+    
+    // 禁用按钮，防止重复点击
+    switchButton.disabled = true;
+    switchButton.textContent = '切换中...';
+    
+    // 获取选择的模式
+    const selectedMode = modeSelect.value;
+    const useAgent = selectedMode === 'agent';
+    
+    // 保存到本地存储
+    localStorage.setItem('useAgent', useAgent.toString());
+    
+    // 更新显示
+    const currentModeElement = document.getElementById('current-mode');
+    if (currentModeElement) {
+        currentModeElement.textContent = useAgent ? 'Agent模式' : 'RAG模式';
+    }
+    
+    // 显示切换状态
+    showModeSwitchStatus(`已切换到${useAgent ? 'Agent' : 'RAG'}模式`, false);
+    
+    // 恢复按钮状态
+    switchButton.disabled = false;
+    switchButton.textContent = '切换模式';
+}
+
+// 显示模式切换状态
+function showModeSwitchStatus(message, isError = false) {
+    const modeSwitchStatus = document.getElementById('mode-switch-status');
+    if (!modeSwitchStatus) return;
+    
+    // 清空之前的状态
+    modeSwitchStatus.textContent = '';
+    
+    // 创建状态元素
+    const statusElement = document.createElement('div');
+    statusElement.classList.add('mode-switch-status-message');
+    
+    if (isError) {
+        statusElement.classList.add('error');
+        statusElement.textContent = message;
+    } else {
+        statusElement.classList.add('success');
+        statusElement.textContent = message;
+    }
+    
+    modeSwitchStatus.appendChild(statusElement);
+    
+    // 3秒后自动清除状态
+    setTimeout(() => {
+        if (modeSwitchStatus) {
+            modeSwitchStatus.innerHTML = '';
+        }
+    }, 3000);
 }
 
 // 添加消息到界面

@@ -583,6 +583,31 @@ footer {
     width: 100%;
 }
 
+/* 模式选择器样式 */
+.mode-selector {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+
+.mode-selector select {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    background-color: #fff;
+    cursor: pointer;
+    min-width: 200px;
+    flex: 1;
+}
+
+.mode-selector select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
 #model-select {
     padding: 8px 12px;
     border: 1px solid #ddd;
@@ -684,6 +709,52 @@ footer {
 }
 
 .model-switch-status.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+/* 模式切换状态显示 */
+.mode-switch-status {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: all 0.3s ease;
+}
+
+.mode-switch-status.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.mode-switch-status.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.mode-switch-status.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.mode-switch-status-message {
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.mode-switch-status-message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.mode-switch-status-message.success {
     background-color: #d4edda;
     color: #155724;
     border: 1px solid #c3e6cb;
