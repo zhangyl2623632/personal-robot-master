@@ -1,4 +1,5 @@
 import os
+import os
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -104,3 +105,22 @@ class Config:
 
 # 创建配置实例
 global_config = Config()
+
+# 添加测试所需的方法
+def _reset(self):
+    """重置配置到初始状态"""
+    # 创建一个新的Config实例
+    new_config = Config()
+    
+    # 清空当前实例的所有属性
+    for attr in list(self.__dict__.keys()):
+        if not attr.startswith('__'):
+            delattr(self, attr)
+    
+    # 复制新实例的所有属性
+    for attr in dir(new_config):
+        if not attr.startswith('__') and not callable(getattr(new_config, attr)):
+            setattr(self, attr, getattr(new_config, attr))
+
+# 将方法绑定到Config类
+Config._reset = _reset

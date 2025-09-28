@@ -6,13 +6,16 @@
 # ---------------------------
 # 核心依赖
 # ---------------------------
-# LangChain框架 - 提供RAG流程的核心功能
-langchain==0.1.16
-langchain-core==0.1.43
-langchain-community==0.0.32
+# LangChain框架 - 提供RAG流程的核心功能（统一到新版分包）
+langchain==0.3.25
+langchain-core==0.3.76
+langchain-community==0.3.0
+langchain-chroma==0.2.6
+langchain-openai==0.3.33
+langchain-text-splitters==0.3.8
 
-# Pydantic - 数据验证和设置管理
-pydantic==2.6.4
+# Pydantic - 数据验证和设置管理（v2 兼容）
+pydantic==2.11.9
 
 # python-dotenv - 环境变量管理
 python-dotenv==1.0.1
@@ -21,7 +24,7 @@ python-dotenv==1.0.1
 # 向量数据库
 # ---------------------------
 # Chroma - 轻量级向量数据库，用于文档向量化存储和检索
-chromadb==0.4.24
+chromadb==1.0.21
 
 # ---------------------------
 # 自然语言处理
@@ -36,7 +39,7 @@ sentence-transformers==2.5.1
 # 大语言模型API客户端
 # ---------------------------
 # OpenAI - OpenAI API客户端
-openai==1.12.0
+openai==1.107.3
 
 # DashScope - 阿里云DashScope服务（支持通义千问等模型）
 dashscope==1.14.0

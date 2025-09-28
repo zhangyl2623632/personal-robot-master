@@ -20,7 +20,7 @@ from langchain.agents import AgentType, initialize_agent
 from src.config import global_config
 from src.utils import format_time, generate_unique_id, safe_json_loads
 from src.vector_store import vector_store_manager
-from src.document_loader import document_loader_manager
+from src.document_loader import document_loader
 from src.llm_client import llm_client, BaseLLMClient, LLMClientFactory, refresh_client
 
 # 配置日志
@@ -306,14 +306,14 @@ class Agent:
             logger.error(f"初始化代理执行器失败: {str(e)}")
             self.agent_executor = None
     
-    def generate_response(self, user_input: str, use_knowledge: bool = True) -> str:
+    def generate_response(self, user_input: str, use_knowledge: bool = True, allow_tools: bool = True) -> str:
         """生成响应（非流式）"""
         try:
             # 记录用户输入
             logger.info(f"收到用户输入: {user_input[:100]}...")
             
             # 检查是否需要使用工具
-            if self._should_use_tools(user_input):
+            if allow_tools and self._should_use_tools(user_input):
                 return self._use_tools(user_input)
             
             # 如果需要使用知识库，先进行检索
@@ -325,32 +325,28 @@ class Agent:
                     # 将知识内容添加到输入中
                     user_input = f"用户问题: {user_input}\n\n相关知识:\n{knowledge_content}"
             
-            # 使用更新后的llm_client生成响应
-            params = {
-                "messages": [
-                    {"role": "system", "content": self.config.SYSTEM_PROMPT}
-                ],
-                "max_tokens": 1000
-            }
-            
-            # 添加历史消息
+            # 构造历史对话（转换为 role/content 字典列表）
+            history = None
             if self.memory:
                 chat_history = self.memory.load_memory_variables({}).get("chat_history", [])
                 from langchain_core.messages import HumanMessage, AIMessage
+                history = []
                 for msg in chat_history:
                     role = "assistant" if isinstance(msg, AIMessage) else "user"
-                    params["messages"].append({"role": role, "content": msg.content})
-            
-            # 添加用户输入
-            params["messages"].append({"role": "user", "content": user_input})
-            
-            response = llm_client._call_api(params)
-            
-            # 提取响应内容
-            if isinstance(response, dict) and 'choices' in response:
-                response_content = response['choices'][0]['message']['content']
-            else:
-                response_content = str(response)
+                    history.append({"role": role, "content": msg.content})
+
+            # 通过 llm_client 的高层接口生成响应（带重试/缓存）
+            response = llm_client.generate_response(
+                prompt=user_input,
+                context=None,
+                history=history,
+                stream=False,
+                cache_enabled=True,
+                structured_schema=None
+            )
+
+            # 标准化响应内容为字符串
+            response_content = response if isinstance(response, str) else str(response)
             
             # 更新记忆
             if self.memory:
@@ -393,31 +389,27 @@ class Agent:
                     # 将知识内容添加到输入中
                     user_input = f"用户问题: {user_input}\n\n相关知识:\n{knowledge_content}"
             
-            # 使用更新后的llm_client生成流式响应
-            params = {
-                "messages": [
-                    {"role": "system", "content": self.config.SYSTEM_PROMPT}
-                ],
-                "stream": True,
-                "max_tokens": 1000
-            }
-            
-            # 添加历史消息
+            # 构造历史对话（转换为 role/content 字典列表）
+            history = None
             if self.memory:
                 chat_history = self.memory.load_memory_variables({}).get("chat_history", [])
                 from langchain_core.messages import HumanMessage, AIMessage
+                history = []
                 for msg in chat_history:
                     role = "assistant" if isinstance(msg, AIMessage) else "user"
-                    params["messages"].append({"role": role, "content": msg.content})
-            
-            # 添加用户输入
-            params["messages"].append({"role": "user", "content": user_input})
-            
-            # 使用新的流式响应方法
+                    history.append({"role": role, "content": msg.content})
+
+            # 使用 llm_client 的流式生成接口（同步生成器），在异步函数中迭代并 yield
             full_response = ""
-            async for chunk in llm_client.generate_streaming_response(params):
-                full_response += chunk
-                yield chunk
+            for chunk in llm_client.generate_streaming_response(
+                prompt=user_input,
+                context=None,
+                history=history,
+                cache_enabled=False
+            ):
+                if chunk:
+                    full_response += chunk
+                    yield chunk
             
             # 更新记忆
             if self.memory:
@@ -501,7 +493,8 @@ class Agent:
         # 简单的规则：检查用户输入是否包含工具相关的关键词
         tool_keywords = {
             "search_knowledge": ["搜索", "查找", "查询", "了解"],
-            "load_document": ["加载", "上传", "导入", "文档"],
+            # 收窄加载文档的触发词，避免普通问句含“文档”误触发
+            "load_document": ["加载文档", "上传文档", "导入文档"],
             "clear_knowledge": ["清空", "删除", "重置"],
             "get_knowledge_stats": ["统计", "状态", "信息"],
             "create_index": ["创建索引"],
@@ -551,7 +544,7 @@ class Agent:
             return result
         except Exception as e:
             logger.error(f"使用工具失败: {str(e)}")
-            return f"使用工具时出现错误: {str(e)}\n尝试使用常规回答方式...\n{self.generate_response(user_input, use_knowledge=True)}"
+            return f"使用工具时出现错误: {str(e)}\n尝试使用常规回答方式...\n{self.generate_response(user_input, use_knowledge=True, allow_tools=False)}"
     
     def _direct_tool_call(self, user_input: str) -> str:
         """直接调用工具"""
@@ -575,7 +568,7 @@ class Agent:
             return f"知识库统计信息：\n\n{stats}"
         
         # 默认返回常规回答
-        return self.generate_response(user_input, use_knowledge=True)
+        return self.generate_response(user_input, use_knowledge=True, allow_tools=False)
     
     def _generate_error_response(self, error: Exception) -> str:
         """生成错误响应"""
@@ -602,7 +595,7 @@ class Agent:
     def get_conversation_stats(self) -> Dict[str, Any]:
         """获取对话统计信息"""
         return self.conversation_stats.copy()
-    
+
     def reset_conversation(self):
         """重置对话"""
         self.conversation_id = generate_unique_id()
@@ -617,7 +610,94 @@ class Agent:
         self.last_error = None
         logger.info(f"对话已重置，新ID: {self.conversation_id}")
         return self.conversation_id
-    
+
+    def generate_response_with_details(self, query: str, use_history: bool = True, user_id: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """生成带引用与细节的回答，供 /api/chat_with_references 使用"""
+        start_time = time.time()
+        try:
+            # 构造历史对话（转换为 role/content 字典列表）
+            history = None
+            if use_history and self.memory:
+                chat_history = self.memory.load_memory_variables({}).get("chat_history", [])
+                from langchain_core.messages import HumanMessage, AIMessage
+                history = []
+                for msg in chat_history:
+                    role = "assistant" if isinstance(msg, AIMessage) else "user"
+                    history.append({"role": role, "content": msg.content})
+
+            # 检索知识库，获取引用材料
+            retrieved_documents = []
+            references = []
+            try:
+                results = vector_store_manager.similarity_search(query, k=5, hybrid_search=True)
+                for i, doc in enumerate(results or []):
+                    content = getattr(doc, 'page_content', '')
+                    metadata = getattr(doc, 'metadata', {}) or {}
+                    source = metadata.get('source', '未知来源')
+                    # 收集用于返回的简要引用和检索详情
+                    references.append({
+                        'index': i + 1,
+                        'source': source,
+                        'snippet': (content[:500] + '...') if len(content) > 500 else content
+                    })
+                    retrieved_documents.append({
+                        'source': source,
+                        'metadata': metadata,
+                        'content_preview': (content[:200] + '...') if len(content) > 200 else content
+                    })
+            except Exception as re_err:
+                logger.error(f"检索知识库失败: {str(re_err)}")
+
+            # 组合上下文并向 LLM 生成回答
+            knowledge_context = "\n\n".join([
+                f"【资料{i+1}】来源: {ref['source']}\n{ref['snippet']}" for i, ref in enumerate(references)
+            ])
+
+            prompt = (
+                f"用户问题: {query}\n\n"
+                f"如果有相关资料，请在保证准确性的前提下，给出结构化概述。"
+                f"优先围绕以下要点：背景/目的、适用范围、角色与流程、关键要点、注意事项。"
+                f"若资料不足，请明确说明不足与后续建议。\n\n"
+                f"相关资料:\n{knowledge_context}"
+            )
+
+            response_text = llm_client.generate_response(
+                prompt=prompt,
+                context=None,
+                history=history,
+                stream=False,
+                cache_enabled=True,
+                structured_schema=None
+            )
+
+            answer = response_text if isinstance(response_text, str) else str(response_text)
+
+            processing_time = round(time.time() - start_time, 4)
+            self._update_conversation_stats(has_response=True)
+
+            return {
+                'answer': answer,
+                'references': references,
+                'intent_type': 'general',
+                'retrieved_documents': retrieved_documents,
+                'processing_time': processing_time,
+                'user_id': user_id,
+                'session_id': session_id
+            }
+        except Exception as e:
+            logger.error(f"生成带引用回答失败: {str(e)}")
+            traceback.print_exc()
+            processing_time = round(time.time() - start_time, 4)
+            return {
+                'answer': self._generate_error_response(e),
+                'references': [],
+                'intent_type': 'error',
+                'retrieved_documents': [],
+                'processing_time': processing_time,
+                'user_id': user_id,
+                'session_id': session_id
+            }
+
     def update_system_prompt(self, new_prompt: str):
         """更新系统提示"""
         try:

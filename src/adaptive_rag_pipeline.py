@@ -919,7 +919,8 @@ class AdaptiveRAGPipeline:
                 global_config.SYSTEM_PROMPT = formatted_prompt['system']
                 
                 try:
-                    llm_result = self.llm_client.generate_response(formatted_prompt['user'])
+                    # 使用模块级 global_llm_client，便于测试通过 patch 注入
+                    llm_result = global_llm_client.generate_response(formatted_prompt['user'])
                     return llm_result
                 finally:
                     # 恢复原始的system prompt，避免影响后续查询

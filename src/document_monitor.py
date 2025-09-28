@@ -4,9 +4,10 @@ import logging
 import threading
 import json
 import shutil
+import hashlib
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue
+from queue import Queue, Empty
 import traceback
 from pathlib import Path
 from src.rag_pipeline import rag_pipeline
@@ -43,7 +44,7 @@ class DocumentChangeHandler:
 class DocumentMonitor:
     """增强的文档监控器，支持事件驱动、错误重试、版本控制和性能优化"""
     
-    def __init__(self, max_workers=4, retry_attempts=3, retry_delay=5):
+    def __init__(self, max_workers=2, retry_attempts=3, retry_delay=5):
         """初始化文档监控器
         
         Args:
@@ -76,6 +77,8 @@ class DocumentMonitor:
             'failed': 0,
             'retries': 0
         }
+        # 文档哈希值存储
+        self.document_hashes = {}
         # 启动处理线程
         self.worker_threads = []
         # 然后尝试加载元数据
@@ -102,6 +105,9 @@ class DocumentMonitor:
                         item.setdefault('version', 1)
                         item.setdefault('priority', 'medium')
                         self.vector_store_metadata[item['path']] = item
+                        # 从元数据加载文件哈希值
+                        if 'hash' in item and item.get('status') == 'success':
+                            self.document_hashes[item['path']] = item['hash']
                     elif isinstance(item, str):
                         # 旧格式的路径字符串
                         self.vector_store_metadata[item] = {
@@ -114,6 +120,9 @@ class DocumentMonitor:
             elif isinstance(loaded_metadata, dict):
                 # 确保每个元数据项都有必要的字段
                 for path, metadata in loaded_metadata.items():
+                    # 从元数据加载文件哈希值
+                    if 'hash' in metadata and metadata.get('status') == 'success':
+                        self.document_hashes[path] = metadata['hash']
                     if isinstance(metadata, dict):
                         metadata.setdefault('status', 'unknown')
                         metadata.setdefault('timestamp', datetime.now().isoformat())
@@ -217,6 +226,26 @@ class DocumentMonitor:
         # 默认返回空字典
         return {}
     
+    def _calculate_file_hash(self, file_path):
+        """计算文件内容的哈希值，用于文件内容去重
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            str: 文件内容的SHA-256哈希值
+        """
+        try:
+            hasher = hashlib.sha256()
+            with open(file_path, 'rb') as f:
+                # 分块读取文件内容，避免大文件占用过多内存
+                for chunk in iter(lambda: f.read(4096), b''):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception as e:
+            logger.error(f"计算文件哈希值失败: {file_path}, 错误: {str(e)}")
+            return None
+    
     def _save_vector_store_metadata(self):
         """保存向量存储元数据到文件"""
         metadata_path = os.path.join(global_config.VECTOR_STORE_PATH, 'metadata.json')
@@ -309,24 +338,42 @@ class DocumentMonitor:
         """工作线程循环，处理队列中的任务"""
         while self.running:
             try:
+                # 尝试从队列获取任务，超时时间为1秒
                 task = self.processing_queue.get(timeout=1.0)
                 if task:
                     task_type = task.get('type')
                     file_path = task.get('path')
                     priority = task.get('priority', 'medium')
                     
-                    logger.debug(f"处理任务: {task_type} - {file_path} (优先级: {priority})")
+                    logger.debug(f"处理任务: {task_type} - {file_path} (优先级: {priority})" )
                     
-                    if task_type == 'new':
-                        success = self._process_new_file_with_retry(file_path)
-                    elif task_type == 'update':
-                        success = self._process_updated_file_with_retry(file_path)
-                    elif task_type == 'delete':
-                        success = self._process_deleted_file(file_path)
-                    
-                    self.processing_queue.task_done()
+                    try:
+                        if task_type == 'new':
+                            success = self._process_new_file_with_retry(file_path)
+                        elif task_type == 'update':
+                            success = self._process_updated_file_with_retry(file_path)
+                        elif task_type == 'delete':
+                            success = self._process_deleted_file(file_path)
+                        else:
+                            logger.warning(f"未知任务类型: {task_type}")
+                            success = False
+                    finally:
+                        # 确保任务被标记为完成，避免队列阻塞
+                        self.processing_queue.task_done()
+            except Empty:
+                # 队列超时是正常的预期行为，不记录为错误
+                pass
             except Exception as e:
                 logger.error(f"工作线程处理出错: {str(e)}")
+                logger.debug(traceback.format_exc())
+                # 确保任务被标记为完成，避免队列阻塞
+                try:
+                    if 'task' in locals():
+                        self.processing_queue.task_done()
+                except Exception:
+                    pass
+            # 短暂休眠，避免CPU占用过高
+            time.sleep(0.01)
     
     def _monitor_loop(self):
         """监控循环，定时检查文档变化"""
@@ -337,11 +384,10 @@ class DocumentMonitor:
                 logger.error(f"文档检查过程中出错: {str(e)}")
                 logger.debug(traceback.format_exc())
             
-            # 等待指定的时间间隔
-            for _ in range(self.update_interval):
-                if not self.running:
-                    break
-                time.sleep(1)
+            # 直接等待指定的时间间隔，提高效率
+            if self.running:
+                logger.debug(f"等待下一个检查周期: {self.update_interval}秒")
+                time.sleep(self.update_interval)
     
     def _check_documents(self):
         """检查文档变化并更新向量存储"""
@@ -352,7 +398,8 @@ class DocumentMonitor:
             return
         
         # 记录当前检查周期
-        logger.info(f"开始文档检查周期 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+        # 避免过于频繁的日志输出，只在需要时记录
+        # logger.info(f"开始文档检查周期 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
         
         # 收集目录下的所有文件
         files_to_check = []
@@ -568,12 +615,43 @@ class DocumentMonitor:
         """处理新增的文件或需要重新处理的文件"""
         try:
             logger.info(f"开始处理新文件: {file_path}")
+            
+            # 计算文件哈希值
+            file_hash = self._calculate_file_hash(file_path)
+            if file_hash:
+                # 检查文件哈希值是否已经存在于记录中（幂等处理）
+                if file_hash in self.document_hashes.values():
+                    # 查找已存在的相同哈希值的文件路径
+                    existing_file_path = next((path for path, hash_val in self.document_hashes.items() if hash_val == file_hash), None)
+                    if existing_file_path and existing_file_path != file_path:
+                        logger.info(f"检测到内容相同的文件，跳过处理: {file_path} (与 {existing_file_path} 内容相同)")
+                        # 直接将文件标记为成功状态，但不添加到向量数据库
+                        metadata_item = {
+                            'path': file_path,
+                            'status': 'success',
+                            'timestamp': datetime.now().isoformat(),
+                            'version': 1,
+                            'size': os.path.getsize(file_path),
+                            'extension': os.path.splitext(os.path.basename(file_path))[1].lower(),
+                            'priority': self._determine_file_priority(file_path),
+                            'hash': file_hash,
+                            'duplicate_of': existing_file_path
+                        }
+                        self.vector_store_metadata[file_path] = metadata_item
+                        self.document_hashes[file_path] = file_hash
+                        self._save_vector_store_metadata()
+                        return True
+            
             # 检查文件是否已经在向量存储中，但允许重新处理unknown状态的文件
             if file_path in self.vector_store_metadata:
                 metadata = self.vector_store_metadata.get(file_path, {})
                 if metadata.get('status') == 'success':
-                    logger.info(f"文件已存在于向量存储中且处理成功，跳过: {file_path}")
-                    return True
+                    # 如果文件状态已成功，但哈希值不同，可能是文件被修改但路径没变
+                    if file_hash and metadata.get('hash') != file_hash:
+                        logger.info(f"文件路径相同但内容已变更，重新处理: {file_path}")
+                    else:
+                        logger.info(f"文件已存在于向量存储中且处理成功，跳过: {file_path}")
+                        return True
                 else:
                     logger.info(f"文件已存在于向量存储中，但状态为{metadata.get('status', 'unknown')}，重新处理: {file_path}")
             else:
@@ -594,7 +672,8 @@ class DocumentMonitor:
                 'timestamp': datetime.now().isoformat(),
                 'action': 'add',
                 'size': file_size,
-                'path': file_path
+                'path': file_path,
+                'hash': file_hash
             }
             self.version_history[file_path].append(version_info)
             
@@ -618,9 +697,12 @@ class DocumentMonitor:
                 'version': version_info['version'],
                 'size': file_size,
                 'extension': file_ext,
-                'priority': self._determine_file_priority(file_path)
+                'priority': self._determine_file_priority(file_path),
+                'hash': file_hash
             }
             self.vector_store_metadata[file_path] = metadata_item
+            if success and file_hash:
+                self.document_hashes[file_path] = file_hash
             self._save_vector_store_metadata()
             self._save_version_history()
             
@@ -644,12 +726,15 @@ class DocumentMonitor:
             
             # 即使发生异常，也要记录文件到元数据
             try:
+                # 计算文件哈希值
+                file_hash = self._calculate_file_hash(file_path)
                 metadata_item = {
                     'path': file_path,
                     'status': 'failed',
                     'timestamp': datetime.now().isoformat(),
                     'version': 0,
-                    'error': str(e)
+                    'error': str(e),
+                    'hash': file_hash
                 }
                 self.vector_store_metadata[file_path] = metadata_item
                 self._save_vector_store_metadata()
@@ -662,7 +747,7 @@ class DocumentMonitor:
             return False
                 
     def _backup_and_remove_file(self, file_path):
-        """备份文件到backup文件夹并删除原文件，支持版本控制"""
+        """备份文件到backup文件夹并删除原文件，支持版本控制和中文文件名"""
         try:
             # 创建backup文件夹（如果不存在）
             backup_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'backup')
@@ -670,10 +755,21 @@ class DocumentMonitor:
             
             # 获取文件名和相对路径
             file_name = os.path.basename(file_path)
-            relative_path = os.path.relpath(file_path, global_config.DOCUMENTS_PATH)
+            # 确保正确处理中文文件名
+            file_name = file_name  # Python 3 中默认使用UTF-8，这里保持原样即可
+            
+            # 计算相对于DOCUMENTS_PATH的路径
+            try:
+                relative_path = os.path.relpath(file_path, global_config.DOCUMENTS_PATH)
+                is_in_documents_path = True
+            except ValueError:
+                # 如果文件不在DOCUMENTS_PATH中，使用绝对路径作为标识
+                relative_path = file_name
+                is_in_documents_path = False
+                logger.warning(f"文件不在配置的DOCUMENTS_PATH中: {file_path}")
             
             # 创建备份文件路径，保留相对目录结构
-            if relative_path != file_name:  # 如果文件不在根目录
+            if is_in_documents_path and relative_path != file_name:  # 如果文件不在根目录
                 backup_subdir = os.path.join(backup_dir, os.path.dirname(relative_path))
                 os.makedirs(backup_subdir, exist_ok=True)
                 backup_path = os.path.join(backup_subdir, file_name)
@@ -687,12 +783,18 @@ class DocumentMonitor:
                 backup_path = os.path.join(os.path.dirname(backup_path), f"{base_name}_{timestamp}{ext}")
             
             # 备份文件
+            logger.info(f"正在备份文件: {file_path} -> {backup_path}")
             shutil.copy2(file_path, backup_path)
-            logger.info(f"文件已备份到: {backup_path}")
+            logger.info(f"文件已成功备份到: {backup_path}")
             
             # 删除原文件
-            os.remove(file_path)
-            logger.info(f"原文件已删除: {file_path}")
+            if is_in_documents_path:  # 只删除DOCUMENTS_PATH中的文件
+                os.remove(file_path)
+                logger.info(f"原文件已成功删除: {file_path}")
+                # 触发文件删除事件通知
+                self._notify_event('on_document_backup_completed', file_path, {'backup_path': backup_path})
+            else:
+                logger.info(f"文件不在DOCUMENTS_PATH中，跳过删除: {file_path}")
         except Exception as e:
             logger.error(f"备份和删除文件失败: {file_path}, 错误: {str(e)}")
             logger.debug(traceback.format_exc())
@@ -741,6 +843,15 @@ class DocumentMonitor:
         try:
             logger.info(f"更新文件在向量存储中的内容: {file_path}")
             
+            # 计算文件哈希值
+            file_hash = self._calculate_file_hash(file_path)
+            if file_hash:
+                # 检查文件哈希值是否已经存在于记录中（幂等处理）
+                existing_metadata = self.vector_store_metadata.get(file_path, {})
+                if existing_metadata.get('status') == 'success' and existing_metadata.get('hash') == file_hash:
+                    logger.info(f"文件内容未变化，跳过更新处理: {file_path}")
+                    return True
+            
             # 获取当前版本信息
             current_version = 1
             if file_path in self.vector_store_metadata:
@@ -757,7 +868,8 @@ class DocumentMonitor:
                 'timestamp': datetime.now().isoformat(),
                 'action': 'update',
                 'size': file_size,
-                'path': file_path
+                'path': file_path,
+                'hash': file_hash
             }
             self.version_history[file_path].append(version_info)
             
@@ -778,6 +890,9 @@ class DocumentMonitor:
                 self.vector_store_metadata[file_path]['timestamp'] = datetime.now().isoformat()
                 self.vector_store_metadata[file_path]['version'] = version_info['version']
                 self.vector_store_metadata[file_path]['size'] = file_size
+                if file_hash:
+                    self.vector_store_metadata[file_path]['hash'] = file_hash
+                    self.document_hashes[file_path] = file_hash
                 self._save_vector_store_metadata()
                 self._save_version_history()
             
@@ -944,12 +1059,18 @@ class DefaultDocumentChangeHandler(DocumentChangeHandler):
     
     def on_document_deleted(self, file_path, metadata=None):
         logger.info(f"事件: 文档已删除 - {file_path}")
-    
+
     def on_document_processing_failed(self, file_path, error=None):
         logger.warning(f"事件: 文档处理失败 - {file_path}, 错误: {error}")
-    
+
     def on_batch_complete(self, processed_files, failed_files):
         logger.info(f"事件: 批次处理完成 - 成功: {len(processed_files)}, 失败: {len(failed_files)}")
+        
+    def on_document_backup_completed(self, file_path, metadata=None):
+        if metadata and 'backup_path' in metadata:
+            logger.info(f"事件: 文档备份完成 - {file_path} -> {metadata['backup_path']}")
+        else:
+            logger.info(f"事件: 文档备份完成 - {file_path}")
 
 
 # 创建文档监控器实例，配置更合理的默认参数

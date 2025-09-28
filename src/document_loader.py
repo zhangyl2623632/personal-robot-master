@@ -4,6 +4,7 @@ import re
 import yaml
 import time
 import hashlib
+import uuid
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_community.document_loaders import (
     TextLoader,
@@ -765,7 +766,6 @@ class DocumentLoader:
     
     def _create_chunk_documents(self, original_doc: Document, chunks: List[str], chunk_method: str) -> List[Document]:
         """从文本块创建文档对象"""
-        import uuid
         result_docs = []
         
         for i, chunk_text in enumerate(chunks):
@@ -824,7 +824,9 @@ class DocumentLoader:
             metadata['char_count'] = len(doc.page_content)
             
             # 提取关键词（简单实现）
-            metadata['keywords'] = self._extract_keywords(doc.page_content)
+            # 将关键词列表转换为逗号分隔的字符串，因为向量存储只支持基本类型
+            keywords_list = self._extract_keywords(doc.page_content)
+            metadata['keywords'] = ', '.join(keywords_list) if keywords_list else ''
             
             # 提取章节信息（如果有）
             if doc_type == 'academic_paper':
@@ -1168,6 +1170,7 @@ class DocumentLoader:
             split_docs = []
             normal_docs = []
             pdf_docs = []
+            pdf_split_docs = []  # 初始化变量，确保无论是否有PDF文档都已定义
             
             # 分离PDF文档和其他文档
             for doc in documents:

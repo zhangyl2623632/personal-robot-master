@@ -5,7 +5,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>个人智能问答机器人</title>
     <link rel="stylesheet" href="/static/style.css">
+    <!-- 优先加载 jsDelivr 的 marked，若加载失败则在后续脚本中进行回退 -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        // 如果主CDN不可用，尝试其它CDN；若全部失败则降级为纯文本渲染
+        (function ensureMarked() {
+            function loadFallback(src, onload) {
+                var s = document.createElement('script');
+                s.src = src;
+                s.onload = onload;
+                s.onerror = function() {
+                    console.warn('备用CDN加载失败: ' + src);
+                };
+                document.head.appendChild(s);
+            }
+            function ensure() {
+                if (window.marked && typeof window.marked.parse === 'function') {
+                    console.info('marked 已可用');
+                    return;
+                }
+                console.warn('主CDN不可用，尝试备用CDN加载 marked');
+                // 依次尝试 unpkg 和 cdnjs
+                loadFallback('https://unpkg.com/marked@4.3.0/marked.min.js', function() {
+                    if (!(window.marked && typeof window.marked.parse === 'function')) {
+                        loadFallback('https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js', function() {
+                            if (!(window.marked && typeof window.marked.parse === 'function')) {
+                                console.error('所有CDN均不可用，降级为纯文本渲染');
+                                window.marked = { parse: function(txt) { return (txt || '').replace(/</g, '&lt;').replace(/>/g, '&gt;'); } };
+                            }
+                        });
+                    }
+                });
+            }
+            // 延迟少许以等待主CDN注入
+            setTimeout(ensure, 500);
+        })();
+    </script>
     <script src="/static/script.js"></script>
 
 </head>

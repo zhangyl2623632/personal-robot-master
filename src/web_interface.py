@@ -1,4 +1,5 @@
 import os
+import os
 import tempfile
 import logging
 import time
@@ -119,7 +120,8 @@ def api_ask():
     try:
         if use_agent:
             # 使用agent回答问题
-            answer = agent.generate_response(query, use_history=False)
+            # Agent 不支持 use_history 参数，改为使用 use_knowledge 控制知识库检索
+            answer = agent.generate_response(query, use_knowledge=True)
         else:
             # 使用RAG流水线回答问题
             answer = rag_pipeline.answer_query(query, use_history=False)
@@ -153,7 +155,9 @@ def api_chat():
     try:
         if use_agent:
             # 使用agent回答问题，支持对话历史
-            answer = agent.generate_response(query, use_history=True, user_id=user_id, session_id=session_id)
+            # Agent.generate_response 不支持 use_history/user_id/session_id 参数
+            # 其内部会自动使用记忆中的对话历史
+            answer = agent.generate_response(query, use_knowledge=True)
         else:
             # 使用RAG流水线回答问题
             answer = rag_pipeline.answer_query(query, use_history=True)
@@ -193,10 +197,8 @@ def api_chat_stream():
             async def async_generator():
                 async for chunk in agent.generate_streaming_response(
                     query, 
-                    use_history=True,
-                    use_knowledge=use_knowledge,
-                    user_id=user_id,
-                    session_id=session_id
+                    # Agent.generate_streaming_response 仅支持 use_knowledge
+                    use_knowledge=use_knowledge
                 ):
                     if chunk:
                         # 使用JSON格式发送数据，避免浏览器端解析问题
@@ -257,7 +259,6 @@ def api_ask_stream():
             async def async_generator():
                 async for chunk in agent.generate_streaming_response(
                     query, 
-                    use_history=False,
                     use_knowledge=use_knowledge
                 ):
                     if chunk:
@@ -689,10 +690,20 @@ def api_switch_model():
     global_config.MODEL_URL = model_config['url']
     
     # 使用全局refresh_client函数刷新所有模块的客户端
-    refresh_client()
+    try:
+        refresh_client()
+        refresh_ok = True
+    except Exception as e:
+        logger.error(f"刷新LLM客户端失败: {str(e)}")
+        return jsonify({'error': '刷新模型客户端失败', 'details': str(e)}), 500
     
-    # 同时更新agent的LLM客户端
-    agent.update_llm_client()
+    # 尝试更新agent的LLM客户端，失败不影响切换成功返回
+    agent_updated = True
+    try:
+        agent.update_llm_client()
+    except Exception as e:
+        agent_updated = False
+        logger.warning(f"更新Agent的LLM客户端失败: {str(e)}")
     
     logger.info(f"已切换模型到: {model_provider} - {model_config['name']}")
     
@@ -700,7 +711,8 @@ def api_switch_model():
         'success': True,
         'message': f'已成功切换到{model_provider}模型',
         'model_provider': model_provider,
-        'model_name': model_config['name']
+        'model_name': model_config['name'],
+        'agent_updated': agent_updated
     })
 
 @app.route('/api/version', methods=['GET'])

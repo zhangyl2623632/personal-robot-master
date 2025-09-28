@@ -347,12 +347,12 @@ class BaseLLMClient(ABC):
                 data = json.loads(json_str)
                 # 使用Pydantic验证
                 validated_data = schema(**data)
-                return True, validated_data.dict()
+                return True, validated_data.model_dump()
             else:
                 # 尝试直接解析整个响应
                 data = json.loads(response)
                 validated_data = schema(**data)
-                return True, validated_data.dict()
+                return True, validated_data.model_dump()
         except (json.JSONDecodeError, ValidationError, TypeError) as e:
             api_logger.error(f"结构化响应验证失败: {str(e)}")
             return False, None
@@ -1093,3 +1093,62 @@ class LLMClientFactory:
 
 # 创建LLM客户端实例
 llm_client = LLMClientFactory.create_client()
+
+# ========================
+# 🔄 全局刷新函数（提供给其他模块调用）
+# ========================
+def refresh_client(target_module: Optional[str] = None, config=None) -> bool:
+    """全局刷新LLM客户端实例并同步到相关模块。
+
+    兼容不同调用方式，例如在 web_interface 或 agent 中直接调用。
+    可忽略传入参数，仅用于统一接口，避免 NameError。
+    """
+    try:
+        # 优先使用实例方法的刷新逻辑，已包含模块同步更新
+        try:
+            llm_client.refresh_client()
+            return True
+        except Exception:
+            # 回退方案：手动创建并替换全局客户端，再同步到相关模块
+            from src.config import global_config as _global_config
+            new_client = LLMClientFactory.create_client(config or _global_config)
+
+            import src.llm_client as _lc
+            _lc.llm_client = new_client
+
+            # 同步更新 web_interface
+            try:
+                import src.web_interface as _wi
+                if hasattr(_wi, 'llm_client'):
+                    _wi.llm_client = new_client
+            except Exception:
+                pass
+
+            # 同步更新 rag_pipeline
+            try:
+                from src.rag_pipeline import rag_pipeline as _rp
+                if hasattr(_rp, 'llm_client'):
+                    _rp.llm_client = new_client
+            except Exception:
+                pass
+
+            # 同步更新 adaptive_rag_pipeline
+            try:
+                from src.adaptive_rag_pipeline import adaptive_rag_pipeline as _arp
+                if hasattr(_arp, 'llm_client'):
+                    _arp.llm_client = new_client
+            except Exception:
+                pass
+
+            # 同步更新 agent
+            try:
+                from src.agent import agent as _agent
+                if hasattr(_agent, 'llm_client'):
+                    _agent.llm_client = new_client
+            except Exception:
+                pass
+
+            return True
+    except Exception as e:
+        logger.error(f"刷新LLM客户端失败: {str(e)}")
+        return False
