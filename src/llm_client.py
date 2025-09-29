@@ -222,7 +222,9 @@ class BaseLLMClient(ABC):
             self.api_key = getattr(self.config, 'API_KEY', None) or os.getenv('API_KEY')
         
         self.model_name = self.config.MODEL_NAME
-        self.timeout = getattr(self.config, 'TIMEOUT', 30)
+        # 允许将超时配置为二元组 (connect_timeout, read_timeout) 以提高稳健性
+        # 默认采用较宽松的设置以降低网络波动导致的连接重置
+        self.timeout = getattr(self.config, 'TIMEOUT', (10, 60))
         self.temperature = getattr(self.config, 'TEMPERATURE', 0.1)
         self.max_tokens = getattr(self.config, 'MAX_TOKENS', 2048)
         
@@ -952,6 +954,8 @@ class DeepSeekClient(BaseLLMClient):
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Connection": "close",
             "Authorization": f"Bearer {self.api_key}"
         }
 
@@ -975,6 +979,8 @@ class OpenAIClient(BaseLLMClient):
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Connection": "close",
             "Authorization": f"Bearer {self.api_key}"
         }
 
@@ -998,6 +1004,8 @@ class MoonshotClient(BaseLLMClient):
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Connection": "close",
             "Authorization": f"Bearer {self.api_key}"
         }
 
@@ -1032,13 +1040,11 @@ class QwenClient(BaseLLMClient):
 
     
     def _get_headers(self) -> Dict[str, str]:
-
         return {
-
             "Content-Type": "application/json",
-
+            "Accept": "application/json",
+            "Connection": "close",
             "Authorization": f"Bearer {self.api_key}"
-
         }
 
     

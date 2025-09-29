@@ -1,107 +1,130 @@
 prompt_templates:
-  citation: 请使用学术引用格式回答，确保每个事实都有来源引用。
-  comparison: 请对比分析不同文档中的相关内容，列出对比表。
-  default: 根据提供的上下文信息回答问题，确保回答准确、简洁。
-  multilingual_rag_base: 你是一个专业的多语言信息提取和翻译助手。请仔细阅读提供的英文文档内容，提取与用户中文问题相关的所有信息，然后用地道的中文组织成完整的回答。即使信息不完整，也要尽可能生成相关的回答。请确保回答准确反映文档内容，不要添加文档中没有的信息。
-  multilingual_rag_conversation: 你是一个专业的多语言对话助手。根据提供的英文文档内容和对话历史，用中文回答用户的最新问题。请确保回答基于文档内容和对话上下文，保持一致性和连贯性。
-  multilingual_rag_technical: 你是一个技术文档翻译和解释专家。请仔细阅读提供的英文技术文档，提取与用户中文技术问题相关的所有技术信息，包括专业术语、参数、步骤等，然后用准确的中文技术语言组织成完整的回答。即使信息不完整，也要尽可能生成相关的技术解释。请确保回答准确反映文档中的技术内容，不要添加文档中没有的信息。
-  novel_detail: 请基于小说内容回答，保持叙事风格一致。
-  requirement_detail: 请重点关注文档中的'shall'语句和具体要求。
-  requirement_summary: 请总结文档中的主要功能点和业务需求。
-  summary: 请生成简洁明了的总结，突出核心观点。
-  multilingual_rag_optimized: 你是一个专业的多语言文档分析助手。请仔细阅读提供的英文文档内容，提取与用户中文问题相关的所有信息，然后用地道的中文组织成完整、准确的回答。即使信息不完整，也请基于已有信息生成最相关的回答，不要简单回复"无法回答"。
-  merchant_loan_specific: 你是一个金融技术文档分析专家。请仔细阅读提供的英文文档内容，提取与Merchant Quick Loan相关的所有信息，包括技术规格、版本信息、发布日期等。即使信息不完整，也要基于已有内容生成详细的中文回答，绝对不要回复"无法回答"或类似表述。
+  default: "根据提供的上下文信息回答问题，确保回答准确、简洁。"
+  summary: "请基于上下文生成简洁的概览，突出关键点。"
+  technical_detail: "请提供明确的技术细节、参数说明与示例。"
+  action_items: "请提取会议纪要中的所有行动项、负责人与截止日期，并清晰汇总。"
+
+retrieval_strategies:
+  hybrid:
+    semantic_weight: 0.7
+    keyword_weight: 0.3
+    rerank: true
+  semantic_only:
+    semantic_weight: 1.0
+    keyword_weight: 0.0
+    rerank: true
+  keyword_only:
+    semantic_weight: 0.0
+    keyword_weight: 1.0
+    rerank: false
+
 strategies:
-  多语言RAG_中英文查询:
-    embedding_model: BAAI/bge-large-zh-v1.5
-    prompt_template: merchant_loan_specific
-    reranker_weight: 0.7
-    score_threshold: 0.35  # 进一步降低阈值，获取更多潜在相关文档
-    top_k: 20  # 大幅增加检索文档数量
-    max_context_length: 20000  # 大幅增加最大上下文长度
-  多语言RAG_多轮对话:
-    embedding_model: BAAI/bge-large-zh-v1.5
-    prompt_template: multilingual_rag_conversation
-    reranker_weight: 0.65
-    score_threshold: 0.45  # 降低阈值
-    top_k: 12  # 增加检索文档数量
-    max_context_length: 12000
-  多语言RAG_技术文档查询:
-    embedding_model: BAAI/bge-large-zh-v1.5
-    prompt_template: multilingual_rag_technical
-    reranker_weight: 0.8
-    score_threshold: 0.4  # 降低阈值
-    top_k: 15  # 增加检索文档数量
-    max_context_length: 20000  # 技术文档需要更大的上下文长度
-  学术论文_具体细节查询:
-    embedding_model: bge-tech
-    prompt_template: citation
+  general_specific_detail:
+    top_k: 5
+    score_threshold: 0.6
+    embedding_model: default
     reranker_weight: 0.4
-    score_threshold: 0.55  # 略微降低阈值
-    top_k: 7  # 增加检索文档数量
-  学术论文_概述请求:
-    embedding_model: bge-tech
+    prompt_template: technical_detail
+    retrieval_type: hybrid
+    diversity_factor: 0.2
+    chunk_overlap: 0.15
+    context_window: 12000
+
+  general_overview:
+    top_k: 3
+    score_threshold: 0.5
+    embedding_model: default
+    reranker_weight: 0.3
     prompt_template: summary
-    reranker_weight: 0.3
-    score_threshold: 0.5
-    top_k: 5  # 增加检索文档数量
-  学术论文_比较分析:
-    embedding_model: bge-tech
-    prompt_template: comparison
-    reranker_weight: 0.35
-    score_threshold: 0.5
-    top_k: 8  # 增加检索文档数量
-  小说_具体细节查询:
-    embedding_model: bge-base
-    prompt_template: novel_detail
-    reranker_weight: 0.3
-    score_threshold: 0.55
-    top_k: 5  # 增加检索文档数量
-  技术文档_具体细节查询:
-    embedding_model: bge-tech
-    prompt_template: default
+    retrieval_type: semantic_only
+    diversity_factor: 0.4
+    chunk_overlap: 0.2
+    context_window: 10000
+
+  technical_specific_detail:
+    top_k: 6
+    score_threshold: 0.65
+    embedding_model: default
     reranker_weight: 0.45
-    score_threshold: 0.6  # 略微降低阈值
-    top_k: 8  # 增加检索文档数量
-  技术文档_故障排查:
+    prompt_template: technical_detail
+    retrieval_type: hybrid
+    diversity_factor: 0.25
+    chunk_overlap: 0.2
+    context_window: 12000
+
+  technical_general:
+    top_k: 4
+    score_threshold: 0.55
     embedding_model: default
-    prompt_template: default
-    reranker_weight: 0.4
-    score_threshold: 0.45  # 降低阈值
-    top_k: 10  # 增加检索文档数量
-  报告文档_数据查询:
-    embedding_model: bge-base
-    prompt_template: default
-    reranker_weight: 0.4
-    score_threshold: 0.55  # 略微降低阈值
-    top_k: 6  # 增加检索文档数量
-  法律文档_条款查询:
-    embedding_model: default
-    prompt_template: default
-    reranker_weight: 0.5
-    score_threshold: 0.65  # 略微降低阈值
-    top_k: 8  # 增加检索文档数量
-  通用_具体细节查询:
-    embedding_model: default
-    prompt_template: default
     reranker_weight: 0.35
-    score_threshold: 0.5  # 降低阈值
-    top_k: 6  # 增加检索文档数量
-  通用_概述请求:
-    embedding_model: default
     prompt_template: summary
+    retrieval_type: semantic_only
+    diversity_factor: 0.35
+    chunk_overlap: 0.15
+    context_window: 10000
+
+  multilingual_query:
+    top_k: 4
+    score_threshold: 0.5
+    embedding_model: multilingual
     reranker_weight: 0.3
-    score_threshold: 0.45  # 降低阈值
-    top_k: 5  # 增加检索文档数量
-  通用_比较分析:
+    prompt_template: default
+    retrieval_type: hybrid
+    diversity_factor: 0.3
+    chunk_overlap: 0.2
+    context_window: 10000
+
+  contract_specific_detail:
+    top_k: 6
+    score_threshold: 0.6
     embedding_model: default
-    prompt_template: comparison
-    reranker_weight: 0.35
-    score_threshold: 0.45  # 降低阈值
-    top_k: 8  # 增加检索文档数量
-  需求文档_具体细节查询:
-    embedding_model: default
-    prompt_template: requirement_detail
     reranker_weight: 0.4
-    score_threshold: 0.55  # 略微降低阈值
-    top_k: 7  # 增加检索文档数量
+    prompt_template: default
+    retrieval_type: hybrid
+    diversity_factor: 0.25
+    chunk_overlap: 0.2
+    context_window: 12000
+
+  requirement_overview:
+    top_k: 3
+    score_threshold: 0.5
+    embedding_model: default
+    reranker_weight: 0.3
+    prompt_template: summary
+    retrieval_type: semantic_only
+    diversity_factor: 0.35
+    chunk_overlap: 0.15
+    context_window: 10000
+
+  report_overview:
+    top_k: 3
+    score_threshold: 0.5
+    embedding_model: default
+    reranker_weight: 0.3
+    prompt_template: summary
+    retrieval_type: semantic_only
+    diversity_factor: 0.35
+    chunk_overlap: 0.15
+    context_window: 10000
+
+  meeting_minutes_action_items:
+    top_k: 5
+    score_threshold: 0.55
+    embedding_model: default
+    reranker_weight: 0.4
+    prompt_template: action_items
+    retrieval_type: hybrid
+    diversity_factor: 0.25
+    chunk_overlap: 0.2
+    context_window: 12000
+
+strategy_hints:
+  fast_summary: general_overview
+  deep_retrieval: general_specific_detail
+  tech_detail: technical_specific_detail
+  tech_overview: technical_general
+  multilingual: multilingual_query
+  contract_detail: contract_specific_detail
+  requirement_overview: requirement_overview
+  report_overview: report_overview
+  meeting_minutes_action_items: meeting_minutes_action_items

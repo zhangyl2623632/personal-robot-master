@@ -14,6 +14,59 @@ classification_config:
     min_section_length: 200
     sample_sections: 3
     sample_size: 5000
+
+# 查询意图路由覆盖（新增）：
+# 针对不同文档类型，为“需检索/直接回答/调用工具/闲聊”提供偏好与动作建议，
+# 以便上层意图路由在选择策略时参考，达到降本增效与提升体验。
+intent_routing_overrides:
+  technical_doc:
+    tool_preference:
+      triggers:
+        keywords: [API, 接口, 调用, curl, HTTP, POST, GET, webhook]
+        patterns: [".*调用.*接口.*", ".*API.*文档.*"]
+      default_action: tool
+      allowed_tools: ["direct_tool_call", "search_knowledge"]
+      fallback_action: rag
+    retrieval_preference:
+      default_action: rag
+      strategy_hint: "技术文档_具体细节查询"
+      top_k: 8
+  requirement_doc:
+    retrieval_preference:
+      default_action: rag
+      strategy_hint: "需求文档_具体细节查询"
+      top_k: 7
+    direct_answer_preference:
+      default_action: direct_answer
+      preset_enabled: true
+  academic_paper:
+    overview_preference:
+      default_action: rag
+      strategy_hint: "学术论文_概述请求"
+      top_k: 5
+    citation_preference:
+      default_action: rag
+      strategy_hint: "学术论文_具体细节查询"
+      top_k: 7
+  multilingual_doc:
+    overview_preference:
+      default_action: rag
+      strategy_hint: "多语言RAG_中英文查询"
+      top_k: 12
+  general:
+    chitchat_preference:
+      default_action: refuse_or_short_reply
+      preset_reply: "我主要处理与文档和工具相关的问题。"
+  report_doc:
+    overview_preference:
+      default_action: rag
+      strategy_hint: "report_overview"
+      top_k: 3
+  meeting_minutes:
+    retrieval_preference:
+      default_action: rag
+      strategy_hint: "meeting_minutes_action_items"
+      top_k: 6
 document_types:
 - confidence_threshold: 0.75
   description: 包含学术研究内容的文档，通常有标题、摘要、引言、方法、结果、结论等结构

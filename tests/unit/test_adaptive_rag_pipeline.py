@@ -26,10 +26,28 @@ class TestAdaptiveRAGPipeline(unittest.TestCase):
         """测试策略选择"""
         # 直接根据文档类型和意图类型选择策略
         strategy = self.pipeline._select_strategy("general", "specific_detail")
-        
+
         # 验证返回了有效的策略
         self.assertIsNotNone(strategy)
         self.assertIsInstance(strategy, dict)
+
+    def test_select_strategy_with_hint_report_overview(self):
+        """测试通过 strategy_hint 选择报告总览策略"""
+        strategy = self.pipeline._select_strategy("report_doc", "overview", strategy_hint="report_overview")
+        self.assertIsNotNone(strategy)
+        self.assertEqual(strategy.get('prompt_template'), 'summary')
+        self.assertEqual(strategy.get('retrieval_type'), 'semantic_only')
+        self.assertEqual(strategy.get('top_k'), 3)
+
+    def test_select_strategy_with_hint_meeting_action_items(self):
+        """测试通过 strategy_hint 选择会议纪要行动项策略"""
+        # 新策略应已加载
+        self.assertIn('meeting_minutes_action_items', self.pipeline.strategies)
+        strategy = self.pipeline._select_strategy("meeting_minutes", "specific_detail", strategy_hint="meeting_minutes_action_items")
+        self.assertIsNotNone(strategy)
+        # 验证核心参数保持一致（成本与质量平衡）
+        self.assertEqual(strategy.get('retrieval_type'), 'hybrid')
+        self.assertEqual(strategy.get('top_k'), 5)
         
     @patch('src.adaptive_rag_pipeline.vector_store_manager')
     def test_retrieve_documents(self, mock_vector_store):

@@ -5,6 +5,7 @@ import json
 import os
 import hashlib
 import time
+import yaml
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -77,10 +78,22 @@ class QueryIntentClassifier:
         
         # 初始化缓存机制
         self._init_cache()
-        
+
         # 加载自定义配置（如果提供）
         if config_path and os.path.exists(config_path):
             self._load_custom_config(config_path)
+
+        # 加载 YAML 路由配置（新增）
+        self._yaml_query_routing = {}
+        self._yaml_intent_overrides = {}
+        try:
+            self._load_yaml_routing_configs(
+                processing_path=os.path.join('config', 'document_processing.yaml'),
+                types_path=os.path.join('config', 'document_types.yaml')
+            )
+            logger.info("查询意图分类器已加载 YAML 路由配置")
+        except Exception as e:
+            logger.warning(f"加载 YAML 路由配置失败，将继续使用内置规则: {str(e)}")
         
         logger.info("查询意图分类器初始化完成")
     
@@ -391,6 +404,220 @@ class QueryIntentClassifier:
         self._store_in_cache(query, result)
         
         return result
+
+    # ===== YAML 驱动的意图分类与路由（新增） =====
+    def _load_yaml_routing_configs(self, processing_path: str, types_path: str) -> None:
+        """加载新增的 YAML 路由相关配置
+
+        Args:
+            processing_path: config/document_processing.yaml 路径
+            types_path: config/document_types.yaml 路径
+        """
+        # 加载 query_routing
+        if os.path.exists(processing_path):
+            with open(processing_path, 'r', encoding='utf-8') as f:
+                proc_cfg = yaml.safe_load(f) or {}
+            self._yaml_query_routing = proc_cfg.get('query_routing', {})
+        else:
+            raise FileNotFoundError(f"未找到配置文件: {processing_path}")
+
+        # 加载 intent_routing_overrides
+        if os.path.exists(types_path):
+            with open(types_path, 'r', encoding='utf-8') as f:
+                types_cfg = yaml.safe_load(f) or {}
+            self._yaml_intent_overrides = types_cfg.get('intent_routing_overrides', {})
+        else:
+            raise FileNotFoundError(f"未找到配置文件: {types_path}")
+
+    def classify_intent_v2(self, query: str, document_type: Optional[str] = None) -> Dict[str, Any]:
+        """基于 YAML query_routing.intents 的意图分类
+
+        不影响现有 classify_intent，作为新接口供路由层调用。
+        """
+        if not query or not query.strip():
+            return {
+                'intent_type': 'unknown',
+                'intent_name': '未知意图',
+                'confidence': 0.0,
+                'reason': '查询内容为空'
+            }
+
+        query = query.strip()
+
+        intents_cfg = (self._yaml_query_routing or {}).get('intents', {})
+        if not intents_cfg:
+            # 回退到旧版规则
+            return self.classify_intent(query, document_type)
+
+        # 评分
+        best = None
+        scores: Dict[str, Dict[str, Any]] = {}
+        for intent_key, cfg in intents_cfg.items():
+            kw = cfg.get('keywords', []) or []
+            pat = cfg.get('patterns', []) or []
+            min_conf = cfg.get('min_confidence', 0.5)
+
+            matched_kw = self._match_keywords(query, kw) if kw else 0
+            # 优化：按“每命中一个关键词给固定分”的方式计分，避免被长关键词列表稀释
+            kw_score = min(matched_kw * 20, 60) if kw else 0
+
+            # 模式匹配加权：锚定模式（^...$）权重大于一般模式
+            pat_hit = self._match_patterns(query, pat) if pat else False
+            strong_pat = any(p.startswith('^') and p.endswith('$') for p in pat) if pat else False
+            pat_score = 0
+            if pat_hit:
+                pat_score = 40 if strong_pat else 25
+
+            # 若 intent 定义了 triggers，则也纳入打分（显式触发给高分）
+            triggers = cfg.get('triggers', {}) or {}
+            explicit_list = triggers.get('explicit', []) or []
+            trig_pat_list = triggers.get('patterns', []) or []
+            explicit_hit = any(t in query for t in explicit_list) if explicit_list else False
+            trig_pat_hit = self._match_patterns(query, trig_pat_list) if trig_pat_list else False
+            if explicit_hit:
+                pat_score = max(pat_score, 40)
+            if trig_pat_hit:
+                pat_score = max(pat_score, 30)
+
+            score = kw_score + pat_score
+            confidence = min(score / 100.0, 1.0) if score > 0 else 0.0
+
+            # 是非问题特殊处理：沿用旧版检测以增强 recall
+            if intent_key in ('yes_no_question',) and self._detect_yes_no_question(query):
+                confidence = max(confidence, 0.8)
+
+            if confidence >= min_conf:
+                scores[intent_key] = {
+                    'confidence': confidence,
+                    'matched_keywords': matched_kw,
+                    'total_keywords': len(kw),
+                    'name': cfg.get('description', intent_key)
+                }
+
+        if not scores:
+            return {
+                'intent_type': 'unknown',
+                'intent_name': '未知意图',
+                'confidence': 0.4,
+                'reason': 'YAML配置未匹配到意图，或置信度不足'
+            }
+
+        best_key = max(scores, key=lambda k: scores[k]['confidence'])
+        best = scores[best_key]
+        return {
+            'intent_type': best_key,
+            'intent_name': best.get('name', best_key),
+            'confidence': best['confidence'],
+            'reason': f"YAML意图 '{best.get('name', best_key)}' 置信度 {best['confidence']:.2f}",
+            'details': {
+                'matched_keywords': best['matched_keywords'],
+                'total_keywords': best['total_keywords'],
+                'all_matched_intents': {k: v['confidence'] for k, v in scores.items()}
+            }
+        }
+
+    def get_routing_decision(self, query: str, document_type: Optional[str] = None) -> Dict[str, Any]:
+        """结合 YAML routing_rules 与 overrides 输出路由决策"""
+        intent = self.classify_intent_v2(query, document_type)
+        routing_rules = (self._yaml_query_routing or {}).get('routing_rules', {})
+        cost_controls = (self._yaml_query_routing or {}).get('cost_controls', {})
+        presets = (self._yaml_query_routing or {}).get('preset_answers', [])
+        intents_cfg = (self._yaml_query_routing or {}).get('intents', {})
+
+        # 初始决策，基于分类结果
+        action_cfg = routing_rules.get(intent['intent_type'], {})
+        decision: Dict[str, Any] = {
+            'intent': intent,
+            'action': action_cfg.get('action', 'rag'),
+            'params': {
+                'retrieval_strategy': action_cfg.get('retrieval_strategy', 'hybrid'),
+                'top_k': action_cfg.get('top_k', 4),
+                'score_threshold': action_cfg.get('score_threshold', 0.5),
+                'use_cache': action_cfg.get('use_cache', True),
+                'max_llm_tokens': cost_controls.get('max_llm_tokens', 1024)
+            },
+            'preset_answer': None
+        }
+
+        # 优先匹配预设答案：若命中触发词，直接返回预设或LLM回答
+        q_lower = query.lower()
+        if presets:
+            for item in presets:
+                triggers = (item or {}).get('triggers', [])
+                answer = (item or {}).get('answer')
+                if any(t.lower() in q_lower for t in triggers):
+                    decision['action'] = 'preset_or_llm'
+                    decision['preset_answer'] = answer
+                    # 合并 direct_answer 的路由参数（若存在）
+                    da_cfg = routing_rules.get('direct_answer', {})
+                    decision['params'].update({
+                        'max_llm_tokens': cost_controls.get('max_llm_tokens', 1024)
+                    })
+                    if 'max_tokens' in da_cfg:
+                        decision['params']['max_llm_tokens'] = da_cfg['max_tokens']
+                    break
+
+        # 当分类置信度不足或为unknown时，进行轻量回退匹配
+        if decision['action'] == 'rag' and (intent.get('intent_type') == 'unknown' or intent.get('confidence', 0.0) < 0.2):
+            # 1) 工具调用快速匹配
+            tc_cfg = intents_cfg.get('tool_call', {}) or {}
+            matched_kw = self._match_keywords(query, tc_cfg.get('keywords', []) or [])
+            pat_hit = self._match_patterns(query, tc_cfg.get('patterns', []) or [])
+            explicit_phrases = [
+                '清空知识库', '加载文档', '创建索引', '切换索引', '优化索引', '导出索引', '导入索引'
+            ]
+            explicit_hit = any(p in query for p in explicit_phrases)
+            # 工具调用回退匹配需要更强证据：显式短语、命中模式或至少2个关键词
+            if explicit_hit or pat_hit or matched_kw >= 2:
+                action_cfg = routing_rules.get('tool_call', {})
+                decision['action'] = action_cfg.get('action', 'tool')
+                decision['params'].update({
+                    'allowed_tools': action_cfg.get('allowed_tools', [])
+                })
+            else:
+                # 2) 闲聊快速匹配
+                cc_cfg = intents_cfg.get('chitchat', {}) or {}
+                if self._match_keywords(query, cc_cfg.get('keywords', []) or []) > 0 or self._match_patterns(query, cc_cfg.get('patterns', []) or []):
+                    action_cfg = routing_rules.get('chitchat', {})
+                    decision['action'] = action_cfg.get('action', 'refuse_or_short_reply')
+                else:
+                    # 3) 检索快速匹配
+                    rn_cfg = intents_cfg.get('retrieval_needed', {}) or {}
+                    if self._match_keywords(query, rn_cfg.get('keywords', []) or []) > 0 or self._match_patterns(query, rn_cfg.get('patterns', []) or []):
+                        action_cfg = routing_rules.get('retrieval_needed', {})
+                        decision['action'] = action_cfg.get('action', 'rag')
+                        decision['params'].update({
+                            'retrieval_strategy': action_cfg.get('retrieval_strategy', 'hybrid'),
+                            'top_k': action_cfg.get('top_k', 4),
+                            'score_threshold': action_cfg.get('score_threshold', 0.5),
+                            'use_cache': action_cfg.get('use_cache', True)
+                        })
+
+        # 应用文档类型 overrides（例如 top_k 或工具偏好）
+        if document_type and self._yaml_intent_overrides:
+            overrides = self._yaml_intent_overrides.get(document_type, {}) or {}
+            # 检索偏好
+            retrieval_pref = overrides.get('retrieval_preference') or overrides.get('overview_preference')
+            if retrieval_pref:
+                # 仅在动作为 rag 时应用
+                if decision['action'] == 'rag':
+                    if 'top_k' in retrieval_pref:
+                        decision['params']['top_k'] = retrieval_pref['top_k']
+                    if 'strategy_hint' in retrieval_pref:
+                        decision['params']['strategy_hint'] = retrieval_pref['strategy_hint']
+
+            # 工具偏好
+            tool_pref = overrides.get('tool_preference')
+            if tool_pref and decision['action'] == 'tool':
+                if 'allowed_tools' in tool_pref:
+                    decision['params']['allowed_tools'] = tool_pref['allowed_tools']
+
+            # 直接回答偏好
+            direct_pref = overrides.get('direct_answer_preference')
+            if direct_pref and decision['action'] in ('preset_or_llm',):
+                decision['params']['preset_enabled'] = direct_pref.get('preset_enabled', True)
+
+        return decision
     
     def clear_cache(self) -> None:
         """清除意图分类缓存"""

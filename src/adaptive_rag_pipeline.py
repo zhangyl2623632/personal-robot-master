@@ -61,6 +61,9 @@ class AdaptiveRAGPipeline:
         
         # 默认提示模板
         self.default_prompt_template = "根据提供的上下文信息回答问题，确保回答准确、简洁。"
+
+        # 策略提示映射（strategy_hint -> strategy_id）
+        self.strategy_hints = {}
         
         logger.info("自适应RAG流水线初始化完成")
     
@@ -97,7 +100,7 @@ class AdaptiveRAGPipeline:
                 else:
                     logger.warning("配置文件中未找到prompt_templates字段")
                     self._load_default_prompt_templates()
-                    
+
                 # 加载检索策略配置
                 if 'retrieval_strategies' in config:
                     self.retrieval_strategies = config['retrieval_strategies']
@@ -122,6 +125,13 @@ class AdaptiveRAGPipeline:
                             "rerank": False
                         }
                     }
+
+                # 加载策略提示映射
+                if 'strategy_hints' in config:
+                    self.strategy_hints = config['strategy_hints'] or {}
+                    logger.info(f"成功加载 {len(self.strategy_hints)} 个策略提示映射")
+                else:
+                    self.strategy_hints = {}
                     
         except Exception as e:
             logger.error(f"加载RAG策略配置文件失败: {str(e)}")
@@ -235,7 +245,7 @@ class AdaptiveRAGPipeline:
             "novel_detail": "请基于小说内容回答，保持叙事风格一致。"
         }
     
-    def _select_strategy(self, document_type: str, intent_type: str) -> Dict[str, Any]:
+    def _select_strategy(self, document_type: str, intent_type: str, strategy_hint: str = None) -> Dict[str, Any]:
         """根据文档类型和查询意图选择合适的RAG策略
         
         Args:
@@ -251,6 +261,21 @@ class AdaptiveRAGPipeline:
         if not intent_type or intent_type == "unknown":
             intent_type = "specific_detail"
         
+        # 如果提供了策略提示，优先根据提示选择策略
+        if strategy_hint:
+            mapped_id = self.strategy_hints.get(strategy_hint)
+            if mapped_id and mapped_id in self.strategies:
+                logger.info(f"根据strategy_hint选择RAG策略: {strategy_hint} -> {mapped_id}")
+                selected_strategy = self.strategies[mapped_id].copy()
+                self._merge_strategy_with_defaults(selected_strategy)
+                return selected_strategy
+            # 兼容：若 strategy_hint 直接等于策略ID，则直接使用
+            if strategy_hint in self.strategies:
+                logger.info(f"根据strategy_hint直接使用策略ID: {strategy_hint}")
+                selected_strategy = self.strategies[strategy_hint].copy()
+                self._merge_strategy_with_defaults(selected_strategy)
+                return selected_strategy
+
         # 构建策略ID
         # 尝试精确匹配：文档类型_意图类型
         strategy_id = f"{document_type}_{intent_type}"
@@ -637,7 +662,12 @@ class AdaptiveRAGPipeline:
                         logger.info(f"从搜索结果推断文档类型: {document_type}")
             
             # 2. 选择RAG策略
-            strategy = self._select_strategy(document_type or "general", intent_type)
+            # 从metadata中获取可能的策略提示
+            strategy_hint = None
+            if isinstance(metadata, dict):
+                strategy_hint = metadata.get('strategy_hint')
+
+            strategy = self._select_strategy(document_type or "general", intent_type, strategy_hint)
             
             # 3. 使用混合检索策略获取相关文档
             try:

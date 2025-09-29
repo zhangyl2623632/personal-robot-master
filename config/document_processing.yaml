@@ -102,3 +102,86 @@ caching:
   enabled: true
   ttl_seconds: 3600
   max_cache_size_mb: 500
+
+# 查询意图与路由配置（新增）
+# 目标：
+# - 意图识别：判断用户问题是“需要检索文档”、“可直接回答”、“需调用工具”还是“无效/闲聊”
+# - 路由决策：根据分类结果，决定是否触发 RAG、调用 API、返回预设答案或拒绝回答
+# - 降本增效：避免对所有问题都进行昂贵的向量检索和生成
+# - 提升体验：对简单问题快速响应，对复杂问题精准检索
+query_routing:
+  intents:
+    retrieval_needed:
+      description: 需要检索文档以回答
+      keywords: [查找, 检索, 文档, 依据, 根据文档, 参考, 哪个文档, 文档内容, 章节, 段落, 条款, TRS, 技术规格, 需求, 配置, 流程, 接口参数, 说明书, 文档中的, 基于文档说明, 报告, 概览, 要点, 关键要点, 关键点, 关键内容, 核心要点, 核心内容, 汇总, 总结, 概要, 总体概览, 报告概览, 会议纪要, 会议要点, 行动项]
+      patterns: [".*文档.*(在哪|包含|说明|要求).*", ".*(TRS|规格|接口|参数|版本|发布).*", ".*请基于文档.*", ".*根据文档说明.*", ".*(报告|概览|概要|要点|会议纪要|会议要点|行动项|摘要|总结).*", ".*(汇总|关键点|关键要点|核心要点|核心内容).*"]
+      min_confidence: 0.5
+    direct_answer:
+      description: 可直接回答的常识或系统预设问题
+      keywords: [你是谁, 帮助, 帮助信息, 用法, 使用方法, 怎么用, 功能, 能力, 版本, version, 状态, 健康检查, health, health check, 欢迎, 你好, hello, hi, 关于, about, 支持文档类型, 文档类型]
+      patterns: ["^(你是谁|帮助|help|usage|版本|状态|hi|hello|你好)$", "^(功能|能力|支持哪些功能)$", "^(关于|about|帮助信息)$"]
+      min_confidence: 0.4
+    tool_call:
+      description: 需调用工具或API执行操作
+      keywords: [调用, 执行, 运行, API, 接口, curl, HTTP, 下载, 上传, 清理, 清理缓存, 重建, 重启, 检查, 清空知识库, 加载文档, 创建索引, 切换索引, 优化索引, 导出索引, 导入索引, 重置索引, 重新构建索引, 刷新索引, 删除索引, 备份索引, 恢复索引, 数据导入, 数据导出]
+      patterns: [".*调用.*API.*", ".*(清理|清理缓存|重建|重启|检查).*", ".*/api/.*", ".*(重置|重新构建|刷新|删除|备份|恢复)索引.*", ".*数据(导入|导出).*"]
+      triggers:
+        explicit: ["清空知识库", "加载文档", "创建索引", "切换索引", "优化索引", "导出索引", "导入索引", "知识库统计", "获取统计", "删除文档", "重新索引", "清理缓存", "重置索引"]
+        patterns: [".*清空知识库.*", ".*加载文档.*", ".*(创建|切换|优化|导出|导入)索引.*", ".*知识库统计.*", ".*获取统计.*", ".*删除文档.*", ".*重新索引.*", ".*清理缓存.*", ".*重置索引.*"]
+      min_confidence: 0.6
+    chitchat:
+      description: 无效或闲聊内容
+      keywords: [哈哈, 呵呵, 随便聊聊, 天气, 笑话, 闲聊, 唠嗑]
+      patterns: ["^(哈哈|呵呵|早上好|晚安|讲个笑话)$", "^天气怎么样$", "^随便聊聊$"]
+      min_confidence: 0.6
+
+  routing_rules:
+    retrieval_needed:
+      action: rag
+      retrieval_strategy: hybrid
+      top_k: 6
+      score_threshold: 0.45
+      use_cache: true
+    direct_answer:
+      action: preset_or_llm
+      use_preset_answers: true
+      llm_enabled: true
+      max_tokens: 256
+    tool_call:
+      action: tool
+      allowed_tools: ["search_knowledge", "load_document", "clear_knowledge", "get_knowledge_stats", "direct_tool_call"]
+      safety_check: true
+    chitchat:
+      action: refuse_or_short_reply
+      preset_reply: "当前只支持与文档和工具相关的问题。"
+
+  cost_controls:
+    skip_rag_for_intents: ["direct_answer", "chitchat"]
+    max_context_length: 10000
+    max_llm_tokens: 1024
+    enable_retrieval_cache: true
+    cache_ttl_seconds: 600
+
+  preset_answers:
+    - triggers: ["你是谁", "关于", "about"]
+      answer: "我是你的文档问答与工具助手，支持检索、调用API等。"
+    - triggers: ["帮助", "帮助信息", "usage", "用法", "使用方法", "怎么用", "功能", "能力", "支持哪些功能"]
+      answer: "我可检索文档、生成总结、调用工具（清空/加载/统计/索引管理等）。"
+    - triggers: ["版本", "version", "release"]
+      answer: "当前机器人版本信息见README与配置文件。"
+    - triggers: ["状态", "健康检查", "health", "health check", "系统健康", "服务状态", "自检"]
+      answer: "系统运行正常。如需维护请使用工具指令：如'请清空知识库'、'加载文档'等。"
+    - triggers: ["欢迎", "你好", "hello", "hi"]
+      answer: "你好！请输入与文档或工具相关的问题。"
+    - triggers: ["支持文档类型", "文档类型"]
+      answer: "当前支持的文档类型包含：学术论文、需求文档、技术文档、合同协议、报告文档、会议纪要、多语言文档等。"
+    - triggers: ["帮助中心", "使用文档", "帮助链接"]
+      answer: "请参见项目README与使用文档，获取详细操作说明。"
+    - triggers: ["系统状态", "系统健康检查", "健康状态"]
+      answer: "系统健康检查通过。如需维护可使用工具指令（清空/加载/统计/索引等）。"
+    - triggers: ["数据来源", "文档来源", "索引来源"]
+      answer: "数据来源包括已加载文档与构建的向量索引。"
+    - triggers: ["联系支持", "联系我们", "技术支持"]
+      answer: "如需帮助，请联系技术支持：support@example.com。"
+    - triggers: ["清理缓存说明", "如何清理缓存"]
+      answer: "可通过工具执行清理缓存操作，减少旧数据影响。"

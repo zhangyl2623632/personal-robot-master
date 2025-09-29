@@ -22,6 +22,7 @@ from src.utils import format_time, generate_unique_id, safe_json_loads
 from src.vector_store import vector_store_manager
 from src.document_loader import document_loader
 from src.llm_client import llm_client, BaseLLMClient, LLMClientFactory, refresh_client
+from src.query_intent_classifier import query_intent_classifier
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -311,19 +312,33 @@ class Agent:
         try:
             # 记录用户输入
             logger.info(f"收到用户输入: {user_input[:100]}...")
+
+            # 路由决策（基于 YAML 配置）
+            routing = self._route_query(user_input)
+            action = routing.get('action')
+            params = routing.get('params', {})
+            preset_answer = routing.get('preset_answer')
+            intent = routing.get('intent', {})
+            logger.info(f"路由决策: action={action}, intent={intent.get('intent_type')}, params={params}")
             
             # 检查是否需要使用工具
-            if allow_tools and self._should_use_tools(user_input):
+            if allow_tools and (action == 'tool' or self._should_use_tools(user_input)):
                 return self._use_tools(user_input)
             
             # 如果需要使用知识库，先进行检索
             knowledge_content = ""
-            if use_knowledge:
-                knowledge_content = self._retrieve_from_knowledge(user_input)
+            if use_knowledge and action == 'rag':
+                # 使用路由参数进行检索
+                hybrid = params.get('retrieval_strategy', 'hybrid') == 'hybrid'
+                top_k = params.get('top_k', 3)
+                knowledge_content = self._retrieve_with_params(user_input, top_k=top_k, hybrid_search=hybrid)
                 if knowledge_content:
                     logger.info(f"从知识库检索到相关内容")
                     # 将知识内容添加到输入中
                     user_input = f"用户问题: {user_input}\n\n相关知识:\n{knowledge_content}"
+            elif action in ('preset_or_llm', 'refuse_or_short_reply') and preset_answer:
+                # 直接返回预设短答
+                return preset_answer
             
             # 构造历史对话（转换为 role/content 字典列表）
             history = None
@@ -379,15 +394,28 @@ class Agent:
             # 记录用户输入
             logger.info(f"收到用户输入(流式): {user_input[:100]}...")
             self.is_streaming = True
+
+            # 路由决策（基于 YAML 配置）
+            routing = self._route_query(user_input)
+            action = routing.get('action')
+            params = routing.get('params', {})
+            preset_answer = routing.get('preset_answer')
+            intent = routing.get('intent', {})
+            logger.info(f"流式路由决策: action={action}, intent={intent.get('intent_type')}, params={params}")
             
             # 如果需要使用知识库，先进行检索
             knowledge_content = ""
-            if use_knowledge:
-                knowledge_content = self._retrieve_from_knowledge(user_input)
+            if use_knowledge and action == 'rag':
+                hybrid = params.get('retrieval_strategy', 'hybrid') == 'hybrid'
+                top_k = params.get('top_k', 3)
+                knowledge_content = self._retrieve_with_params(user_input, top_k=top_k, hybrid_search=hybrid)
                 if knowledge_content:
                     logger.info(f"从知识库检索到相关内容(流式)")
                     # 将知识内容添加到输入中
                     user_input = f"用户问题: {user_input}\n\n相关知识:\n{knowledge_content}"
+            elif action in ('preset_or_llm', 'refuse_or_short_reply') and preset_answer:
+                yield preset_answer
+                return
             
             # 构造历史对话（转换为 role/content 字典列表）
             history = None
@@ -475,6 +503,46 @@ class Agent:
         except Exception as e:
             logger.error(f"从知识库检索失败: {str(e)}")
             return ""
+
+    def _retrieve_with_params(self, query: str, top_k: int = 3, hybrid_search: bool = True) -> str:
+        """根据路由参数从知识库检索内容（新增）"""
+        try:
+            results = vector_store_manager.similarity_search(
+                query,
+                k=top_k,
+                hybrid_search=hybrid_search
+            )
+            self.conversation_stats["total_search_queries"] += 1
+            formatted_results = []
+            for i, doc in enumerate(results):
+                content = getattr(doc, 'page_content', '')
+                metadata = getattr(doc, 'metadata', {})
+                source_info = f"来源: {metadata.get('source', '未知')}"
+                if 'page' in metadata:
+                    source_info += f"，第 {metadata['page']} 页"
+                if 'date' in metadata:
+                    source_info += f"，日期: {metadata['date']}"
+                max_content_length = 300
+                if len(content) > max_content_length:
+                    content = content[:max_content_length] + "..."
+                formatted_results.append(f"【相关资料 {i+1}】\n{source_info}\n{content}\n")
+            return "\n".join(formatted_results)
+        except Exception as e:
+            logger.error(f"路由参数检索失败: {str(e)}")
+            return ""
+
+    def _route_query(self, user_input: str, document_type: Optional[str] = None) -> Dict[str, Any]:
+        """调用查询意图分类器，生成路由决策（新增）"""
+        try:
+            return query_intent_classifier.get_routing_decision(user_input, document_type=document_type)
+        except Exception as e:
+            logger.warning(f"路由决策失败，回退到默认: {str(e)}")
+            return {
+                'intent': {'intent_type': 'unknown', 'confidence': 0.0},
+                'action': 'rag',
+                'params': {'retrieval_strategy': 'hybrid', 'top_k': 3},
+                'preset_answer': None
+            }
     
     def clear_chat_history(self):
         """清空对话历史"""
