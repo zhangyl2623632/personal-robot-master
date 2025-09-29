@@ -23,9 +23,14 @@ import langdetect
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.config import global_config
+try:
+    from docx import Document as DocxDocument
+except Exception:
+    DocxDocument = None
 
 # 导入文档分类器
 from src.document_classifier import document_classifier
+from src.llm_client import extract_metadata_from_text
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -813,6 +818,54 @@ class DocumentLoader:
         
         # 提取标题（从文件名或内容）
         base_metadata['title'] = self._extract_title(file_path, documents)
+
+        # 解析 DOCX 核心属性（作者、创建/修改时间 等）
+        try:
+            ext_low = (file_ext or '').lower()
+            if ('docx' in ext_low or ext_low == '.docx') and DocxDocument is not None:
+                props = DocxDocument(file_path).core_properties
+                author = getattr(props, 'author', None) or getattr(props, 'creator', None)
+                created = getattr(props, 'created', None)
+                modified = getattr(props, 'modified', None)
+                last_modified_by = getattr(props, 'last_modified_by', None)
+                title_prop = getattr(props, 'title', None)
+
+                if author:
+                    base_metadata['author'] = str(author)
+                if created:
+                    try:
+                        base_metadata['created'] = created.isoformat()
+                    except Exception:
+                        base_metadata['created'] = str(created)
+                if modified:
+                    try:
+                        base_metadata['modified'] = modified.isoformat()
+                    except Exception:
+                        base_metadata['modified'] = str(modified)
+                if last_modified_by:
+                    base_metadata['last_modified_by'] = str(last_modified_by)
+                # 用文档属性标题补全（若前面未提取到）
+                if title_prop and not base_metadata.get('title'):
+                    base_metadata['title'] = str(title_prop)
+        except Exception as e:
+            logger.warning(f"DOCX 核心属性解析失败: {str(e)}")
+
+        # 从文本内容中进一步提取作者/发布日期等（支持“Prepared by/Release Date”）
+        try:
+            sample_text = "\n".join([d.page_content for d in documents[:5]]) if documents else ""
+            if sample_text:
+                text_meta = extract_metadata_from_text(sample_text)
+                # 映射作者
+                if 'author' not in base_metadata and text_meta.get('author'):
+                    base_metadata['author'] = text_meta['author']
+                # 映射创建时间（优先Release Date/Release，然后Date）
+                if 'created' not in base_metadata:
+                    for k in ['created', 'release_date', 'release', 'date']:
+                        if text_meta.get(k):
+                            base_metadata['created'] = text_meta.get(k)
+                            break
+        except Exception as e:
+            logger.warning(f"文本元数据提取失败: {str(e)}")
         
         # 为每个分块添加元数据
         for i, doc in enumerate(documents):
@@ -831,8 +884,8 @@ class DocumentLoader:
             # 提取章节信息（如果有）
             if doc_type == 'academic_paper':
                 metadata['section'] = self._extract_section(doc.page_content)
-            
-            enhanced_docs.append(Document(page_content=doc.page_content, metadata=metadata))
+        
+        enhanced_docs.append(Document(page_content=doc.page_content, metadata=metadata))
         
         return enhanced_docs
     

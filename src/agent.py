@@ -321,6 +321,12 @@ class Agent:
             intent = routing.get('intent', {})
             logger.info(f"路由决策: action={action}, intent={intent.get('intent_type')}, params={params}")
             
+            # 优先处理文档元数据类问题：作者/建立日期/创建时间等，直接从文档属性中给出答案
+            if self._is_metadata_query(user_input):
+                meta_answer = self._answer_metadata_query(user_input)
+                if meta_answer:
+                    return meta_answer
+            
             # 检查是否需要使用工具
             if allow_tools and (action == 'tool' or self._should_use_tools(user_input)):
                 return self._use_tools(user_input)
@@ -334,8 +340,13 @@ class Agent:
                 knowledge_content = self._retrieve_with_params(user_input, top_k=top_k, hybrid_search=hybrid)
                 if knowledge_content:
                     logger.info(f"从知识库检索到相关内容")
-                    # 将知识内容添加到输入中
-                    user_input = f"用户问题: {user_input}\n\n相关知识:\n{knowledge_content}"
+                    # 使用更严格的指令化提示，避免通用拒答
+                    user_input = (
+                        f"用户问题: {user_input}\n\n"
+                        f"请严格基于下方资料生成结构化概览，突出关键要点（背景/目的、适用范围、角色与流程、关键要点、注意事项）。"
+                        f"不得输出诸如‘无法回答’、‘信息不足无法作答’等通用拒绝语；若资料确有不足，请直接说明不足，并给出可执行的后续建议。\n\n"
+                        f"相关资料:\n{knowledge_content}"
+                    )
             elif action in ('preset_or_llm', 'refuse_or_short_reply') and preset_answer:
                 # 直接返回预设短答
                 return preset_answer
@@ -351,17 +362,50 @@ class Agent:
                     history.append({"role": role, "content": msg.content})
 
             # 通过 llm_client 的高层接口生成响应（带重试/缓存）
+            # 检索型回答避免写入缓存，防止命中通用拒答缓存
+            cache_enabled = not (use_knowledge and action == 'rag')
             response = llm_client.generate_response(
                 prompt=user_input,
                 context=None,
                 history=history,
                 stream=False,
-                cache_enabled=True,
+                cache_enabled=cache_enabled,
                 structured_schema=None
             )
 
             # 标准化响应内容为字符串
             response_content = response if isinstance(response, str) else str(response)
+
+            # 若命中通用拒答或过短，且存在知识上下文，则进行一次强化重试
+            def _is_low_quality(text: str) -> bool:
+                t = (text or "").strip()
+                if len(t) < 30:
+                    return True
+                bad_phrases = [
+                    "无法回答", "不能回答", "无法作答", "信息不足", "根据现有资料，无法回答该问题",
+                    "无法提供", "无法确定", "抱歉，无法"
+                ]
+                return any(bp in t for bp in bad_phrases)
+
+            if knowledge_content and _is_low_quality(response_content):
+                logger.info("检测到低质量回答，进行一次强化重试以生成结构化概览。")
+                strict_prompt = (
+                    f"用户问题: {user_input}\n\n"
+                    f"任务: 仅基于下方资料，生成中文结构化‘报告概览要点’列表。\n"
+                    f"要求: 列表化、简洁准确；包含 背景/目的、适用范围、关键特性、技术范围 或 文档目的；"
+                    f"若资料不足，请标注‘资料不足’并列出已确认的要点与后续建议；"
+                    f"禁止输出任何‘无法回答/不能回答’等拒绝语。\n\n"
+                    f"资料:\n{knowledge_content}"
+                )
+                retry_resp = llm_client.generate_response(
+                    prompt=strict_prompt,
+                    context=None,
+                    history=history,
+                    stream=False,
+                    cache_enabled=False,
+                    structured_schema=None
+                )
+                response_content = retry_resp if isinstance(retry_resp, str) else str(retry_resp)
             
             # 更新记忆
             if self.memory:
@@ -488,8 +532,16 @@ class Agent:
                 source_info = f"来源: {metadata.get('source', '未知')}"
                 if 'page' in metadata:
                     source_info += f"，第 {metadata['page']} 页"
-                if 'date' in metadata:
+                # 优先展示文档相关元数据，便于回答“作者/建立日期”等问题
+                if 'author' in metadata:
+                    source_info += f"，作者: {metadata['author']}"
+                # 使用 created/modified/date 作为时间线信息
+                if 'created' in metadata:
+                    source_info += f"，创建时间: {metadata['created']}"
+                elif 'date' in metadata:
                     source_info += f"，日期: {metadata['date']}"
+                if 'modified' in metadata:
+                    source_info += f"，修改时间: {metadata['modified']}"
                 
                 # 对内容进行截断，避免过长
                 max_content_length = 300
@@ -520,8 +572,15 @@ class Agent:
                 source_info = f"来源: {metadata.get('source', '未知')}"
                 if 'page' in metadata:
                     source_info += f"，第 {metadata['page']} 页"
-                if 'date' in metadata:
+                # 展示作者与时间元数据，便于回答“作者/建立日期”等问题
+                if 'author' in metadata:
+                    source_info += f"，作者: {metadata['author']}"
+                if 'created' in metadata:
+                    source_info += f"，创建时间: {metadata['created']}"
+                elif 'date' in metadata:
                     source_info += f"，日期: {metadata['date']}"
+                if 'modified' in metadata:
+                    source_info += f"，修改时间: {metadata['modified']}"
                 max_content_length = 300
                 if len(content) > max_content_length:
                     content = content[:max_content_length] + "..."
@@ -530,6 +589,56 @@ class Agent:
         except Exception as e:
             logger.error(f"路由参数检索失败: {str(e)}")
             return ""
+
+    # ===== 元数据直答增强 =====
+    def _is_metadata_query(self, text: str) -> bool:
+        """判断是否为文档元数据类问题（作者/建立日期/创建时间等）"""
+        if not text:
+            return False
+        t = text.lower()
+        keywords_cn = [
+            "作者", "文件作者", "文档作者",
+            "建立日期", "创建日期", "创建时间", "生成日期",
+            "修改时间", "最后修改", "最后修改者",
+        ]
+        keywords_en = ["author", "created", "date", "modified", "last modified"]
+        return any(k in text for k in keywords_cn) or any(k in t for k in keywords_en)
+
+    def _answer_metadata_query(self, user_input: str) -> str:
+        """直接基于检索到的文档元数据给出简洁直答"""
+        try:
+            results = vector_store_manager.similarity_search(user_input, k=5, hybrid_search=True) or []
+            if not results:
+                return "未找到相关文档，无法提取作者或日期。"
+
+            best_md = None
+            for doc in results:
+                md = getattr(doc, 'metadata', {}) or {}
+                if md.get('author') or md.get('created') or md.get('date') or md.get('modified') or md.get('last_modified_by'):
+                    best_md = md
+                    break
+            if best_md is None:
+                best_md = getattr(results[0], 'metadata', {}) or {}
+
+            source = best_md.get('source') or best_md.get('source_file_name') or '未知来源'
+            author = best_md.get('author') or '未设置'
+            created = best_md.get('created') or best_md.get('date') or '未设置'
+            modified = best_md.get('modified') or '未设置'
+            last_modified_by = best_md.get('last_modified_by') or '未设置'
+
+            if all(v == '未设置' for v in [author, created]) and modified == '未设置':
+                return f"来源: {source}。未在该文档属性中找到作者或建立日期。请在Word文件属性中补充作者与创建时间后重新入库。"
+
+            return (
+                f"来源: {source}\n"
+                f"作者: {author}\n"
+                f"建立日期: {created}\n"
+                f"修改时间: {modified}\n"
+                f"最后修改者: {last_modified_by}"
+            )
+        except Exception as e:
+            logger.error(f"元数据直答失败: {str(e)}")
+            return "处理元数据查询时出现错误，请稍后重试。"
 
     def _route_query(self, user_input: str, document_type: Optional[str] = None) -> Dict[str, Any]:
         """调用查询意图分类器，生成路由决策（新增）"""

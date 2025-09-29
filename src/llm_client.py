@@ -140,9 +140,12 @@ def extract_metadata_from_text(text: str) -> Dict[str, str]:
     # 正则模式匹配常见元数据
     patterns = {
         'version': r'(Version|版本)[\s:]+([\d\.]+)',
-        'date': r'(Date|日期)[\s:]+([\d\-\/]+)',
+        # 日期允许更宽松的格式，以匹配“28th August, 2025”等
+        'date': r'(Date|日期)[\s:]+([^\n]+)',
         'author': r'(Author|作者)[\s:]+([^\n]+)',
+        'prepared_by': r'(Prepared by|Prepared)[\s:]+([^\n]+)',
         'release': r'(Release|发布)[\s:]+([^\n]+)',
+        'release_date': r'(Release Date)[\s:]+([^\n]+)',
     }
 
     # 提取元数据
@@ -150,7 +153,14 @@ def extract_metadata_from_text(text: str) -> Dict[str, str]:
         for line in lines[:50]:  # 只在前50行查找
             match = re.search(pattern, line, re.IGNORECASE)
             if match:
-                metadata[key] = match.group(1).strip()
+                # 关键修复：使用匹配值组而不是标签组
+                # group(1) 是标签（如 Author/作者），group(2) 才是实际值
+                value_group_index = 2
+                # 对非数值类的提取做清理
+                value = match.group(value_group_index).strip()
+                # 移除可能的尾部标点或多余空格
+                value = re.sub(r'[\s\-:]+$', '', value)
+                metadata[key] = value
 
     # 启发式提取主标题
     if 'title' not in metadata:
@@ -195,6 +205,15 @@ def extract_metadata_from_text(text: str) -> Dict[str, str]:
     for key, value in key_sections.items():
         if value:
             metadata[key] = '\n'.join(value[:5])  # 只保留前5个项目
+
+    # 规范化：将“Prepared by”映射为作者；将发布日期映射为创建时间
+    if 'author' not in metadata and 'prepared_by' in metadata:
+        metadata['author'] = metadata['prepared_by']
+    if 'created' not in metadata:
+        for tkey in ['release_date', 'release', 'date']:
+            if tkey in metadata:
+                metadata['created'] = metadata[tkey]
+                break
 
     return metadata
 
@@ -459,8 +478,8 @@ class BaseLLMClient(ABC):
                     self._last_successful_response = response
                     self._is_healthy = True
                     
-                    # 如果启用缓存，保存到缓存
-                    if cache_enabled:
+                    # 如果启用缓存，且响应质量达标，保存到缓存
+                    if cache_enabled and self._should_cache_response(response):
                         cache_key = response_cache._get_cache_key(prompt, context, history)
                         response_cache.set(cache_key, response)
                     
@@ -504,6 +523,24 @@ class BaseLLMClient(ABC):
                 except:
                     pass
             return default_response
+
+    def _should_cache_response(self, response_text: str) -> bool:
+        """判断响应是否适合写入缓存，避免缓存通用拒答或过短内容"""
+        try:
+            text = (response_text or "").strip()
+            if len(text) < 30:
+                api_logger.info("响应过短，不写入缓存")
+                return False
+            generic_patterns = [
+                "无法回答", "抱歉", "我不知道", "暂时不可用", "稍后再试",
+                "不能提供", "无权访问"
+            ]
+            if any(pat in text for pat in generic_patterns):
+                api_logger.info("检测到通用拒答语句，不写入缓存")
+                return False
+            return True
+        except Exception:
+            return True
     
     def _get_cache_hit_rate(self) -> float:
         """计算缓存命中率"""

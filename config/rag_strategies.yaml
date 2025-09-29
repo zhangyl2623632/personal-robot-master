@@ -97,12 +97,12 @@ strategies:
     context_window: 10000
 
   report_overview:
-    top_k: 3
-    score_threshold: 0.5
+    top_k: 5
+    score_threshold: 0.3
     embedding_model: default
-    reranker_weight: 0.3
+    reranker_weight: 0.35
     prompt_template: summary
-    retrieval_type: semantic_only
+    retrieval_type: hybrid
     diversity_factor: 0.35
     chunk_overlap: 0.15
     context_window: 10000
